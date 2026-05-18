@@ -11,7 +11,7 @@ The program does **not** select an agent, lock an agent, click inside the game c
 In PowerShell, go to the project directory:
 
 ```powershell
-cd *\valo picker"
+cd "path\to\project""
 ```
 
 ### 2. Check if the program works
