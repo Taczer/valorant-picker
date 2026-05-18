@@ -16,10 +16,10 @@ cd *\valo picker"
 
 ### 2. Check if the program works
 
-Run the demo without Valorant:
+Run:
 
 ```powershell
-python -m valo_picker --sample
+python -m valo_picker 
 ```
 
 You should see a screen like this:
