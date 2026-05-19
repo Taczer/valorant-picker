@@ -7,6 +7,14 @@ import time
 from pathlib import Path
 from textwrap import indent
 
+from .app_settings import (
+    AppSettings,
+    default_settings_path,
+    load_settings,
+    save_settings,
+    with_refresh,
+    with_start_mode,
+)
 from .data.agents import AGENTS
 from .data.maps import MAPS
 from .debug_log import DEFAULT_DEBUG_LOG_PATH, SafeDebugLogger
@@ -29,15 +37,20 @@ STYLE_OPTIONS = {
 
 
 def main() -> None:
+    _configure_console_encoding()
     parser = argparse.ArgumentParser(prog="Valo Picker")
     parser.add_argument("--manual", action="store_true", help="wymuś ręczny tryb CMD")
+    parser.add_argument("--live", action="store_true", help="wymuś ekran live nawet przy innym domyślnym trybie")
     parser.add_argument("--sample", action="store_true", help="uruchom przykładowe lobby Ascent")
     parser.add_argument("--status", action="store_true", help="sprawdź lokalny status Valoranta/Riot lockfile")
-    parser.add_argument("--refresh", type=float, default=5.0, help="częstotliwość odświeżania live 2.0-10.0s")
+    parser.add_argument("--refresh", type=float, default=None, help="częstotliwość odświeżania live 2.0-10.0s")
     parser.add_argument("--debug", action="store_true", help="zapisz bezpieczny debug log bez tokenów")
     parser.add_argument("--debug-log", default=str(DEFAULT_DEBUG_LOG_PATH), help="ścieżka debug logu")
     args = parser.parse_args()
     debug_logger = _debug_logger_from_args(args)
+    settings = load_settings()
+    if args.refresh is not None:
+        settings = with_refresh(settings, args.refresh)
 
     if args.status:
         print_status(debug_logger)
@@ -49,7 +62,14 @@ def main() -> None:
         run_interactive()
         return
 
-    run_live_first(_clamp_refresh(args.refresh), debug_logger)
+    if not args.live and settings.default_start_mode == "manual":
+        run_interactive()
+        return
+    if not args.live and settings.default_start_mode == "status":
+        print_status(debug_logger)
+        return
+
+    run_live_first(settings, debug_logger)
 
 
 def print_status(debug_logger: SafeDebugLogger | None = None) -> None:
@@ -85,22 +105,100 @@ def print_status(debug_logger: SafeDebugLogger | None = None) -> None:
     print(f"- Komunikat: {snapshot.message}")
 
 
-def run_live_first(refresh_seconds: float, debug_logger: SafeDebugLogger | None = None) -> None:
+def _configure_console_encoding() -> None:
+    if os.name != "nt":
+        return
+    output_is_console = sys.stdout.isatty()
+    input_is_console = sys.stdin.isatty()
+    encoding = "utf-8"
+
+    if output_is_console or input_is_console:
+        _use_readable_console_font()
+        encoding = _windows_oem_encoding()
+
+    for stream in (sys.stdout, sys.stderr):
+        _reconfigure_stream(stream, encoding)
+    _reconfigure_stream(sys.stdin, encoding if input_is_console else "utf-8")
+
+
+def _windows_oem_encoding() -> str:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        code_page = kernel32.GetOEMCP()
+        if code_page:
+            kernel32.SetConsoleOutputCP(code_page)
+            kernel32.SetConsoleCP(code_page)
+            return f"cp{code_page}"
+    except Exception:
+        return "utf-8"
+    return "utf-8"
+
+
+def _use_readable_console_font() -> None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Coord(ctypes.Structure):
+            _fields_ = [
+                ("X", wintypes.SHORT),
+                ("Y", wintypes.SHORT),
+            ]
+
+        class ConsoleFontInfoEx(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.ULONG),
+                ("nFont", wintypes.DWORD),
+                ("dwFontSize", Coord),
+                ("FontFamily", wintypes.UINT),
+                ("FontWeight", wintypes.UINT),
+                ("FaceName", wintypes.WCHAR * 32),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        if handle in (0, -1):
+            return
+        info = ConsoleFontInfoEx()
+        info.cbSize = ctypes.sizeof(ConsoleFontInfoEx)
+        if not kernel32.GetCurrentConsoleFontEx(handle, False, ctypes.byref(info)):
+            return
+        info.FaceName = "Consolas"
+        kernel32.SetCurrentConsoleFontEx(handle, False, ctypes.byref(info))
+    except Exception:
+        pass
+
+
+def _reconfigure_stream(stream, encoding: str) -> None:
+    try:
+        stream.reconfigure(encoding=encoding, errors="replace")
+    except Exception:
+        pass
+
+
+def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None = None) -> None:
     snapshot = ValorantApiService.read_live_snapshot(debug_logger)
     while True:
         clear_terminal()
         print(render_live_snapshot(snapshot))
-        print(f"\nRefresh interval: {refresh_seconds:.1f}s")
+        print(f"\nRefresh interval: {settings.refresh_seconds:.1f}s")
         if debug_logger:
             print(f"Debug log: {debug_logger.path}")
-        choice = _read_menu_choice(refresh_seconds)
+        choice = _read_menu_choice(settings.refresh_seconds)
         if choice is None:
             return
         if choice == "0":
             return
         if choice == "5":
             run_interactive()
-            return
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger)
+            continue
+        if choice == "6":
+            settings = _settings_menu(settings)
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger)
+            continue
         if choice == "4":
             clear_terminal()
             print(render_agent_list())
@@ -127,6 +225,7 @@ def run_interactive() -> None:
     profile = _ask_profile()
     print()
     print_recommendation(recommend(team, MAPS[map_name], profile))
+    _pause_after_manual_result()
 
 
 def sample_recommendation():
@@ -254,8 +353,50 @@ def _find_key(raw: str, options: dict) -> str | None:
     return None
 
 
-def _clamp_refresh(value: float) -> float:
-    return max(2.0, min(10.0, value))
+def _settings_menu(settings: AppSettings) -> AppSettings:
+    clear_terminal()
+    print_header()
+    print("Ustawienia aplikacji")
+    print(f"Plik: {default_settings_path()}")
+    print()
+    print(f"1. Refresh interval: {settings.refresh_seconds:.1f}s")
+    print(f"2. Domyślny tryb startu: {_start_mode_label(settings.default_start_mode)}")
+    print()
+    print("Enter bez wartości zostawia aktualne ustawienie.")
+
+    raw_refresh = input("Nowy refresh 2-10s: ").strip().replace(",", ".")
+    if raw_refresh:
+        try:
+            settings = with_refresh(settings, float(raw_refresh))
+        except ValueError:
+            print("Nieprawidłowy refresh, zostawiam poprzednią wartość.")
+
+    print()
+    print("Tryb startu:")
+    print("1. Live")
+    print("2. Manual")
+    print("3. Status")
+    raw_mode = input("Wybór: ").strip()
+    mode_by_choice = {"1": "live", "2": "manual", "3": "status"}
+    if raw_mode in mode_by_choice:
+        settings = with_start_mode(settings, mode_by_choice[raw_mode])
+
+    try:
+        save_settings(settings)
+        print("\nZapisano ustawienia.")
+    except OSError as exc:
+        print(f"\nNie udało się zapisać ustawień: {exc}")
+    input("Press Enter to return to menu...")
+    return settings
+
+
+def _start_mode_label(start_mode: str) -> str:
+    labels = {
+        "live": "Live",
+        "manual": "Manual",
+        "status": "Status",
+    }
+    return labels.get(start_mode, "Live")
 
 
 def _debug_logger_from_args(args) -> SafeDebugLogger | None:
@@ -285,6 +426,13 @@ def _read_menu_choice(timeout_seconds: float) -> str | None:
             return input("Choice: ").strip().lstrip("\ufeff")
         except EOFError:
             return None
+
+
+def _pause_after_manual_result() -> None:
+    try:
+        input("\nNaciśnij Enter, żeby wrócić do menu albo zamknąć tryb ręczny...")
+    except EOFError:
+        return
 
 
 def _read_windows_choice(timeout_seconds: float) -> str:

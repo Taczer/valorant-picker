@@ -23,23 +23,7 @@ def render_live_snapshot(snapshot: LivePregameSnapshot) -> str:
     mode = snapshot.mode or "pre-game / agent-select"
     game_state = snapshot.game_state or snapshot.status.value
 
-    lines.extend(
-        [
-            f"Map: {map_name}",
-            f"Mode: {mode}",
-            f"State: {game_state}",
-        ]
-    )
-    if snapshot.region or snapshot.shard:
-        lines.append(f"Region: {snapshot.region or '?'} / Shard: {snapshot.shard or '?'}")
-    if snapshot.puuid:
-        lines.append(f"PUUID: {_masked_id(snapshot.puuid)}")
-    if snapshot.party_id:
-        lines.append(f"PartyID: {_short_id(snapshot.party_id)}")
-    if snapshot.match_id:
-        lines.append(f"MatchID: {_short_id(snapshot.match_id)}")
-    if snapshot.client_version:
-        lines.append(f"ClientVersion: {snapshot.client_version}")
+    lines.extend(_snapshot_summary(snapshot, map_name, mode, game_state))
     lines.append(_line("-"))
 
     team = recommendation.team if recommendation else (normalized.team if normalized else ())
@@ -129,19 +113,51 @@ def _recommendation_section(recommendation: Recommendation) -> list[str]:
     lines = [
         "Recommendation:",
         f"  Best Pick: {best.agent.name} ({best.agent.role.value})",
-        "  Alternatives: " + ", ".join(candidate.agent.name for candidate in recommendation.alternatives[:4]),
-        f"  Team Score: {recommendation.analysis.score}/10 -> {best.team_score_after_pick}/10",
+        f"  Score: {recommendation.analysis.score}/10 -> {best.team_score_after_pick}/10",
     ]
     if recommendation.best_role_to_fill:
         lines.append(f"  Fill Role: {recommendation.best_role_to_fill.value}")
+    alternatives = ", ".join(candidate.agent.name for candidate in recommendation.alternatives[:4])
+    if alternatives:
+        lines.append(f"  Alternatives: {alternatives}")
     lines.append("Problems:")
-    problems = recommendation.analysis.problems[:5]
+    problems = recommendation.analysis.problems[:3]
     if problems:
         lines.extend(f"  - {problem}" for problem in problems)
     else:
         lines.append("  - No major composition problems.")
+    lines.append("Why:")
+    lines.extend(f"  - {reason}" for reason in best.reasons[:3])
+    if best.warnings:
+        lines.append("Watch:")
+        lines.extend(f"  - {warning}" for warning in best.warnings[:2])
     lines.append("Advice:")
-    lines.extend(_wrapped_text(recommendation.advice))
+    lines.extend(_wrapped_text(_short_advice(recommendation.advice)))
+    return lines
+
+
+def _snapshot_summary(snapshot: LivePregameSnapshot, map_name: str, mode: str, game_state: str) -> list[str]:
+    if snapshot.status == LiveStatus.AGENT_SELECT:
+        details = [f"Map: {map_name}", f"State: {game_state}"]
+        if snapshot.region or snapshot.shard:
+            details.append(f"Region: {snapshot.region or '?'}/{snapshot.shard or '?'}")
+        lines = [" | ".join(details)]
+        if snapshot.match_id:
+            lines.append(f"Match: {_short_id(snapshot.match_id)}")
+        return lines
+    if snapshot.status == LiveStatus.IN_GAME:
+        lines = [f"Map: {map_name}", f"Mode: {mode}", f"State: {game_state}"]
+        if snapshot.match_id:
+            lines.append(f"Match: {_short_id(snapshot.match_id)}")
+        return lines
+
+    lines = [f"State: {game_state}", f"Map: {map_name}"]
+    if snapshot.valorant_running or snapshot.lockfile_found:
+        lines.append(
+            "Client: "
+            f"Valorant {'yes' if snapshot.valorant_running else 'no'}, "
+            f"lockfile {'yes' if snapshot.lockfile_found else 'no'}"
+        )
     return lines
 
 
@@ -164,6 +180,7 @@ def _menu() -> list[str]:
         "3. Refresh Now",
         "4. List all agents",
         "5. Manual Mode",
+        "6. Settings",
         "0. Exit",
     ]
 
@@ -190,6 +207,13 @@ def _line(char: str) -> str:
 
 def _wrapped_text(text: str, indent: str = "  ") -> list[str]:
     return [indent + line for line in wrap(text, width=WIDTH - len(indent), break_long_words=False)] or [indent]
+
+
+def _short_advice(text: str) -> str:
+    parts = [part.strip() for part in text.split(". ") if part.strip()]
+    if len(parts) <= 2:
+        return text
+    return ". ".join(parts[:2]) + "."
 
 
 def _short_id(value: str) -> str:
