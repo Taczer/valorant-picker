@@ -175,6 +175,7 @@ Na dole ekranu jest menu:
 3. Refresh Now
 4. List all agents
 5. Manual Mode
+6. Settings
 0. Exit
 ```
 
@@ -183,17 +184,36 @@ Najczęściej używane:
 - `3` - odśwież teraz,
 - `4` - pokaż listę agentów,
 - `5` - przejdź do trybu ręcznego,
+- `6` - ustaw częstotliwość odświeżania i domyślny tryb startu,
 - `0` - wyjdź.
 
-Program odświeża dane automatycznie co około 5 sekund.
+Program odświeża dane automatycznie co około 5 sekund. Możesz to zmienić w `6. Settings`.
 
-Możesz zmienić częstotliwość:
+Możesz też jednorazowo nadpisać częstotliwość z terminala:
 
 ```powershell
 python -m valo_picker --refresh 5.0
 ```
 
 Dozwolony zakres to 2.0-10.0 sekund.
+
+Ustawienia zapisują się w profilu użytkownika Windows:
+
+```text
+%APPDATA%\ValoPicker\settings.json
+```
+
+Domyślny tryb startu może być:
+
+- `Live` - standardowy ekran live,
+- `Manual` - od razu tryb ręczny,
+- `Status` - od razu status połączenia.
+
+Jeśli ustawisz `Manual` albo `Status`, możesz jednorazowo wymusić ekran live:
+
+```powershell
+python -m valo_picker --live
+```
 
 ## 8. Tryb ręczny jako fallback
 
@@ -305,3 +325,17 @@ Program nie ma funkcji:
 - czytania pamięci gry.
 
 Ty sam wybierasz agenta w Valorancie.
+
+## 11. Jeśli polskie znaki dalej są jako `?`
+
+Nowa wersja ustawia kodowanie klasycznego CMD na stronę OEM Windowsa. Jeśli nadal widzisz `Domy?lny` albo `Wyb?r`, problemem jest zwykle font okna konsoli.
+
+Najprostsze obejście:
+
+1. kliknij prawym na pasek tytułu okna CMD,
+2. wybierz `Properties`,
+3. przejdź do `Font`,
+4. ustaw `Consolas` albo `Lucida Console` zamiast `Raster Fonts`,
+5. uruchom `dist\ValoPicker.exe` ponownie.
+
+Alternatywnie uruchom aplikację w Windows Terminal albo PowerShell.

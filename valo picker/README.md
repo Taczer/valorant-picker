@@ -12,6 +12,18 @@ python -m valo_picker
 
 Domyślne uruchomienie pokazuje ekran live-first w stylu CMD. Jeśli klient Valoranta albo agent select nie są dostępne, program pokaże status i menu z przejściem do trybu ręcznego.
 
+W menu aplikacji opcja `6. Settings` zapisuje:
+
+- częstotliwość odświeżania live w zakresie 2.0-10.0 sekund,
+- domyślny tryb startu: `Live`, `Manual` albo `Status`.
+- `--live` może jednorazowo wymusić ekran live, nawet gdy zapisano inny domyślny tryb.
+
+Ustawienia trafiają do:
+
+```text
+%APPDATA%\ValoPicker\settings.json
+```
+
 Wymuszenie trybu ręcznego:
 
 ```powershell
@@ -30,6 +42,20 @@ Status lokalnego klienta:
 python -m valo_picker --status
 ```
 
+Wymuszenie ekranu live:
+
+```powershell
+python -m valo_picker --live
+```
+
+Budowanie pliku `.exe` bez wymagania Pythona u użytkownika:
+
+```powershell
+.\build_exe.ps1
+```
+
+Szczegóły są w [BUILD_EXE.md](BUILD_EXE.md).
+
 Bezpieczny debug log bez tokenów:
 
 ```powershell
@@ -44,7 +70,7 @@ Notatki meta map/agentów i źródła strojenia znajdują się w [META_NOTES.md]
 
 ## Status projektu
 
-Szacowany postęp całej docelowej aplikacji: **80%**.
+Szacowany postęp całej docelowej aplikacji: **85%**.
 
 Gotowe:
 
@@ -60,7 +86,7 @@ Gotowe:
 - **Terminal UI w stylu CMD: 95%**
   - ekran `PRE-GAME (AGENT SELECT)`,
   - ekran `CURRENT GAME`,
-  - team, rekomendacja, problemy, menu,
+  - skrócony ekran teamu, rekomendacji, problemów i menu,
   - nicki i agenci w aktywnym meczu,
   - porada do aktualnie granej postaci,
   - brak opcji auto-pick/lock.
@@ -86,6 +112,17 @@ Gotowe:
   - warnings/errors normalizera,
   - maskowanie UUID w endpointach,
   - bez nagłówków auth i bez tokenów.
+- **Settings: 70%**
+  - zapis częstotliwości odświeżania,
+  - zapis domyślnego trybu startu,
+  - nadpisywanie refreshu argumentem `--refresh`,
+  - wymuszanie live argumentem `--live`.
+- **Build EXE: 100%**
+  - PyInstaller `onefile` CMD build,
+  - `dist\ValoPicker.exe`,
+  - skrypt `build_exe.ps1`,
+  - instrukcja `BUILD_EXE.md`,
+  - test `--sample`, `--status` i debug log na gotowym `.exe`.
 - **Test live na prawdziwym kliencie: 100%**
   - Agent Select działa na realnym lobby,
   - IN_GAME działa w aktywnym meczu,
@@ -98,7 +135,6 @@ Do zrobienia:
   - tryb początkujący,
   - import/eksport profilu.
 - **Settings**
-  - zapis częstotliwości odświeżania,
   - ręczne ustawienia regionu/fallback.
 - **UI desktop/web**
   - dashboard,
