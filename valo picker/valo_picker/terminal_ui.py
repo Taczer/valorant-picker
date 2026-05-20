@@ -175,12 +175,10 @@ def _menu() -> list[str]:
     return [
         _line("="),
         "---- Menu ----",
-        "1. View Pre-Game (Agent Select) Players",
-        "2. View Recommendation",
-        "3. Refresh Now",
-        "4. List all agents",
-        "5. Manual Mode",
-        "6. Settings",
+        "1. Refresh Now",
+        "2. List all agents",
+        "3. Manual Mode",
+        "4. Settings",
         "0. Exit",
     ]
 

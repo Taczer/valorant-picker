@@ -2,20 +2,34 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .models import UserProfile
 
 
 DEFAULT_REFRESH_SECONDS = 5.0
 DEFAULT_START_MODE = "live"
 START_MODES = frozenset({"live", "manual", "status"})
+ALLOWED_PROFILE_STYLES = frozenset(
+    {
+        "aggressive",
+        "support",
+        "lurker",
+        "controller",
+        "defensive",
+        "initiator",
+        "solo_queue",
+    }
+)
 
 
 @dataclass(frozen=True)
 class AppSettings:
     refresh_seconds: float = DEFAULT_REFRESH_SECONDS
     default_start_mode: str = DEFAULT_START_MODE
+    profile: UserProfile = field(default_factory=UserProfile)
 
 
 def default_settings_path() -> Path:
@@ -43,8 +57,9 @@ def save_settings(settings: AppSettings, path: Path | None = None) -> None:
     payload = {
         "refresh_seconds": settings.refresh_seconds,
         "default_start_mode": settings.default_start_mode,
+        "profile": profile_to_dict(settings.profile),
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
 def settings_from_dict(raw: dict[str, Any]) -> AppSettings:
@@ -52,20 +67,48 @@ def settings_from_dict(raw: dict[str, Any]) -> AppSettings:
     start_mode = raw.get("default_start_mode", DEFAULT_START_MODE)
     if not isinstance(start_mode, str) or start_mode not in START_MODES:
         start_mode = DEFAULT_START_MODE
-    return AppSettings(refresh_seconds=refresh, default_start_mode=start_mode)
+    profile = profile_from_dict(raw.get("profile"))
+    return AppSettings(refresh_seconds=refresh, default_start_mode=start_mode, profile=profile)
 
 
 def with_refresh(settings: AppSettings, refresh_seconds: float) -> AppSettings:
     return AppSettings(
         refresh_seconds=_coerce_refresh(refresh_seconds),
         default_start_mode=settings.default_start_mode,
+        profile=settings.profile,
     )
 
 
 def with_start_mode(settings: AppSettings, start_mode: str) -> AppSettings:
     if start_mode not in START_MODES:
         start_mode = DEFAULT_START_MODE
-    return AppSettings(refresh_seconds=settings.refresh_seconds, default_start_mode=start_mode)
+    return AppSettings(refresh_seconds=settings.refresh_seconds, default_start_mode=start_mode, profile=settings.profile)
+
+
+def with_profile(settings: AppSettings, profile: UserProfile) -> AppSettings:
+    return AppSettings(
+        refresh_seconds=settings.refresh_seconds,
+        default_start_mode=settings.default_start_mode,
+        profile=profile,
+    )
+
+
+def profile_from_dict(raw: Any) -> UserProfile:
+    if not isinstance(raw, dict):
+        return UserProfile()
+    raw_styles = raw.get("preferred_styles", ())
+    styles = _coerce_profile_styles(raw_styles)
+    beginner_mode = bool(raw.get("beginner_mode", False))
+    if _contains_beginner_style(raw_styles):
+        beginner_mode = True
+    return UserProfile(preferred_styles=frozenset(styles), beginner_mode=beginner_mode)
+
+
+def profile_to_dict(profile: UserProfile) -> dict[str, Any]:
+    return {
+        "preferred_styles": sorted(profile.preferred_styles & ALLOWED_PROFILE_STYLES),
+        "beginner_mode": profile.beginner_mode,
+    }
 
 
 def _coerce_refresh(value: Any) -> float:
@@ -73,3 +116,21 @@ def _coerce_refresh(value: Any) -> float:
         return max(2.0, min(10.0, float(value)))
     except (TypeError, ValueError):
         return DEFAULT_REFRESH_SECONDS
+
+
+def _coerce_profile_styles(raw_styles: Any) -> set[str]:
+    if isinstance(raw_styles, str):
+        candidates = [raw_styles]
+    elif isinstance(raw_styles, (list, tuple, set, frozenset)):
+        candidates = raw_styles
+    else:
+        return set()
+    return {style for style in candidates if isinstance(style, str) and style in ALLOWED_PROFILE_STYLES}
+
+
+def _contains_beginner_style(raw_styles: Any) -> bool:
+    if isinstance(raw_styles, str):
+        return raw_styles == "beginner"
+    if isinstance(raw_styles, (list, tuple, set, frozenset)):
+        return any(style == "beginner" for style in raw_styles)
+    return False

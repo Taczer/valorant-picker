@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .debug_log import SafeDebugLogger
-from .models import LivePregameSnapshot, LiveStatus
+from .models import LivePregameSnapshot, LiveStatus, UserProfile
 from .normalizer import normalize_coregame_match, normalize_pregame_match
 from .recommender import recommend
 
@@ -166,7 +166,11 @@ class ValorantApiService:
         return REGION_TO_SHARD.get(canonical)
 
     @classmethod
-    def read_live_snapshot(cls, debug_logger: SafeDebugLogger | None = None) -> LivePregameSnapshot:
+    def read_live_snapshot(
+        cls,
+        debug_logger: SafeDebugLogger | None = None,
+        profile: UserProfile | None = None,
+    ) -> LivePregameSnapshot:
         valorant_running = cls.is_valorant_running()
         auth = cls.try_load_local_auth()
         if auth is None:
@@ -213,7 +217,7 @@ class ValorantApiService:
                 if debug_logger:
                     debug_logger.log_snapshot(snapshot)
                 return snapshot
-            snapshot = service._read_remote_snapshot(region_context, client_version, auth_bundle)
+            snapshot = service._read_remote_snapshot(region_context, client_version, auth_bundle, profile)
             if debug_logger:
                 debug_logger.log_snapshot(snapshot)
             return snapshot
@@ -238,13 +242,14 @@ class ValorantApiService:
         region: str | None = None,
         shard: str | None = None,
         client_version: str | None = None,
+        profile: UserProfile | None = None,
     ) -> LivePregameSnapshot:
         normalized = normalize_pregame_match(payload, self_puuid)
         recommendation = None
         status = LiveStatus.WAITING_FOR_AGENT_SELECT
         message = "Pre-game data received, but recommendation cannot be built yet."
         if normalized.map_info is not None and normalized.team:
-            recommendation = recommend(normalized.team, normalized.map_info)
+            recommendation = recommend(normalized.team, normalized.map_info, profile)
             status = LiveStatus.AGENT_SELECT
             message = "Agent Select lobby detected."
         elif normalized.errors:
@@ -496,19 +501,21 @@ class ValorantApiService:
         region_context: ValorantRegionContext,
         client_version: str,
         auth_bundle: RiotAuthBundle | None = None,
+        profile: UserProfile | None = None,
     ) -> LivePregameSnapshot:
         try:
-            return self._read_remote_snapshot_with_auth(auth_bundle or self.get_auth_bundle(), region_context, client_version)
+            return self._read_remote_snapshot_with_auth(auth_bundle or self.get_auth_bundle(), region_context, client_version, profile)
         except ValorantApiHttpError as exc:
             if exc.status_code not in {401, 403}:
                 raise
-            return self._read_remote_snapshot_with_auth(self.get_auth_bundle(), region_context, client_version)
+            return self._read_remote_snapshot_with_auth(self.get_auth_bundle(), region_context, client_version, profile)
 
     def _read_remote_snapshot_with_auth(
         self,
         auth_bundle: RiotAuthBundle,
         region_context: ValorantRegionContext,
         client_version: str,
+        profile: UserProfile | None,
     ) -> LivePregameSnapshot:
         party_id = None
         party_warning = None
@@ -540,6 +547,7 @@ class ValorantApiService:
                             region=region_context.region,
                             shard=region_context.shard,
                             client_version=client_version,
+                            profile=profile,
                         )
                     except ValorantApiHttpError:
                         pass
@@ -626,6 +634,7 @@ class ValorantApiService:
             region=region_context.region,
             shard=region_context.shard,
             client_version=client_version,
+            profile=profile,
         )
         if party_warning and snapshot.normalized_match is None:
             return snapshot

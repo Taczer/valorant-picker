@@ -81,12 +81,20 @@ def _score_agent(
 
     if agent.role in analysis.missing_roles:
         role_weight = _role_weight(map_info, agent.role)
-        bonus = 35 * role_weight
+        bonus = 38 * role_weight
         if agent.role == Role.CONTROLLER and analysis.role_counts[Role.CONTROLLER] == 0:
-            bonus = 65 * role_weight
+            bonus = 78 * role_weight
             reasons.append("Team nie ma żadnego controllera, więc smoke'i są najwyższym priorytetem.")
+        elif agent.role == Role.INITIATOR and analysis.role_counts[Role.INITIATOR] == 0:
+            bonus = 52 * role_weight
+            reasons.append("Team nie ma inicjatora, więc brakuje info, flasha albo cleara pod execute.")
         elif agent.role == Role.DUELIST and analysis.role_counts[Role.DUELIST] == 0:
-            bonus = 48 * role_weight
+            has_core_utility = (
+                analysis.role_counts[Role.CONTROLLER] >= 1
+                and analysis.role_counts[Role.INITIATOR] >= 1
+                and analysis.role_counts[Role.SENTINEL] >= 1
+            )
+            bonus = (52 if has_core_utility else 30) * role_weight
             reasons.append("Team nie ma entry duelista, więc brakuje agenta do otwierania site'u.")
         else:
             reasons.append(f"Uzupełnia brakującą rolę: {agent.role.value}.")
@@ -94,24 +102,27 @@ def _score_agent(
 
     role_count = analysis.role_counts[agent.role]
     if role_count >= 2 and agent.role != Role.CONTROLLER:
-        penalty = 12 * (role_count - 1)
+        penalty = 15 * (role_count - 1)
         score -= penalty
         warnings.append(f"Team ma już {role_count} agentów w roli {agent.role.value}.")
     if agent.role == Role.DUELIST and analysis.role_counts[Role.DUELIST] >= 2:
-        score -= 60
+        score -= 95
         warnings.append("To byłby trzeci duelist albo kolejny pick bez utility.")
     if agent.role == Role.CONTROLLER and role_count >= 1:
         if _map_has_feature(map_info, "wall_map") and "wall" in agent.utility:
-            score += 12
+            score += 24
             reasons.append("Mapa lubi drugiego controllera ze ścianą, bo łatwiej odciąć długie linie.")
         else:
-            score -= 10
+            score -= 12
             warnings.append("Team ma już controllera; drugi smoke musi dawać konkretną wartość mapową.")
     if agent.role == Role.SENTINEL and role_count >= 1 and (
         Role.CONTROLLER in analysis.missing_roles or Role.INITIATOR in analysis.missing_roles
     ):
-        score -= 18
+        score -= 25
         warnings.append("Drugi sentinel jest ryzykowny, gdy nadal brakuje smoke'ów albo inicjatora.")
+
+    critical_gap_score = _score_critical_gaps(agent, analysis, warnings)
+    score += critical_gap_score
 
     recommended_names = set(map_info.recommended_for_role(agent.role))
     if agent.name in recommended_names:
@@ -138,12 +149,12 @@ def _score_agent(
     score += _score_team_synergy(agent, team, map_info, analysis, reasons, warnings)
 
     if agent.solo_queue:
-        score += 8
+        score += 5
         reasons.append("Dobrze działa w solo queue.")
 
     style_matches = sorted(profile.preferred_styles & agent.playstyles)
     if style_matches:
-        score += 10 + 4 * len(style_matches)
+        score += 7 + 3 * len(style_matches)
         reasons.append("Pasuje do Twojego stylu gry: " + ", ".join(style_matches) + ".")
     if profile.beginner_mode:
         if agent.difficulty <= 2 or "beginner" in agent.playstyles:
@@ -163,7 +174,56 @@ def _score_agent(
     if not reasons:
         reasons.append(agent.description)
 
-    return CandidateScore(agent, round(score, 1), tuple(dict.fromkeys(reasons)), tuple(dict.fromkeys(warnings)), team_after)
+    return CandidateScore(agent, round(score, 1), _prioritize_reasons(reasons), tuple(dict.fromkeys(warnings)), team_after)
+
+
+def _score_critical_gaps(agent, analysis, warnings: list[str]) -> float:
+    score = 0.0
+
+    if analysis.role_counts[Role.CONTROLLER] == 0 and agent.role != Role.CONTROLLER:
+        score -= 42
+        warnings.append("Brak smoke'ów jest ważniejszy niż komfortowy pick albo profil gracza.")
+
+    has_controller = analysis.role_counts[Role.CONTROLLER] >= 1
+    if has_controller and analysis.role_counts[Role.INITIATOR] == 0 and agent.role != Role.INITIATOR:
+        score -= 24
+        warnings.append("Bez inicjatora execute będzie słabszy nawet przy dobrych smoke'ach.")
+
+    has_initiator = analysis.role_counts[Role.INITIATOR] >= 1
+    if has_controller and has_initiator and analysis.utility_counts.get("flank_watch", 0) == 0:
+        if agent.role != Role.SENTINEL and "flank_watch" not in agent.utility:
+            score -= 12
+            warnings.append("Team nadal nie ma stabilnego flank watcha.")
+
+    has_sentinel = analysis.role_counts[Role.SENTINEL] >= 1
+    if has_controller and has_initiator and has_sentinel and analysis.role_counts[Role.DUELIST] == 0:
+        if agent.role != Role.DUELIST:
+            score -= 14
+            warnings.append("Po zabezpieczeniu utility team nadal potrzebuje entry.")
+
+    return score
+
+
+def _prioritize_reasons(reasons: list[str]) -> tuple[str, ...]:
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    profile_prefixes = (
+        "Dobrze działa w solo queue.",
+        "Pasuje do Twojego stylu gry:",
+        "Jest dobry dla trybu początkującego.",
+    )
+
+    def priority(reason: str) -> int:
+        if reason.startswith(profile_prefixes):
+            return 2
+        if (
+            "map" in reason.lower()
+            or reason.startswith("Mapa ")
+            or reason.startswith("Pasuje do cech mapy:")
+        ):
+            return 1
+        return 0
+
+    return tuple(sorted(unique_reasons, key=priority))
 
 
 def _team_score_after(agent, team: tuple[TeamSlot, ...], map_info: MapInfo) -> float:
@@ -189,7 +249,14 @@ def _score_utility_targets(agent, map_info: MapInfo, utility_counts: dict[str, i
     for utility, target in tuning.utility_targets.items():
         current = utility_counts.get(utility, 0)
         if current < target and utility in agent.utility:
-            weight = 11.0 if utility in {"smokes", "wall", "flank_watch", "info"} else 8.0
+            if utility == "smokes":
+                weight = 16.0
+            elif utility == "wall":
+                weight = 15.0
+            elif utility in {"flank_watch", "info"}:
+                weight = 12.0
+            else:
+                weight = 9.0
             if current == 0:
                 score += weight
             else:
@@ -209,22 +276,24 @@ def _score_map_features(agent, map_info: MapInfo, reasons: list[str], warnings: 
 
     feature_hits: list[str] = []
     if "wall_map" in features and "wall" in agent.utility:
-        score += 13
+        score += 18
         feature_hits.append("ściana na długie linie")
     if "plant_wall" in features and {"wall", "plant"} & agent.utility:
-        score += 8
+        score += 10
         feature_hits.append("bezpieczny plant")
     if {"long_range", "wide_sites", "recon_lanes"} & features and {"info", "recon"} & agent.utility:
-        score += 9
+        score += 10
         feature_hits.append("informacja na otwarte przestrzenie")
     if {"tight_chokes", "standard_chokes"} & features and {"flash", "stun", "clear", "suppress"} & agent.utility:
-        score += 7
+        score += 10
         feature_hits.append("czyszczenie ciasnych wejść")
+        if agent.role == Role.DUELIST and "clear" in agent.utility:
+            score += 6
     if {"three_sites", "flank_pressure", "pinch_attacks"} & features and {"flank_watch", "stall", "info"} & agent.utility:
-        score += 8
+        score += 9
         feature_hits.append("kontrola flank i rotacji")
     if {"fast_exec", "pinch_attacks"} & features and {"mobility", "entry", "flash", "stun"} & agent.utility:
-        score += 6
+        score += 7
         feature_hits.append("tempo execute'u")
     if "mid_control" in features and {"smokes", "info", "flash", "stall"} & agent.utility:
         score += 5
@@ -237,10 +306,10 @@ def _score_map_features(agent, map_info: MapInfo, reasons: list[str], warnings: 
         feature_hits.append("presja Operatora")
 
     if "wall_map" in features and agent.role == Role.CONTROLLER and "wall" not in agent.utility:
-        score -= 8
+        score -= 14
         warnings.append("To mapa ze szczególnie dużą wartością wall controllera.")
     if "tight_chokes" in features and agent.role == Role.DUELIST and "clear" not in agent.utility and "mobility" not in agent.utility:
-        score -= 7
+        score -= 10
         warnings.append("Na tej mapie duelist bez mocnego cleara lub mobilności ma trudniejsze wejścia.")
 
     if feature_hits:
@@ -281,10 +350,10 @@ def _score_team_synergy(
             score += min(14, 6 * support_count)
             synergy_reasons.append("Ma inicjatora, który może przygotować entry zamiast wymuszać suche wejście.")
         if analysis.role_counts[Role.INITIATOR] == 0:
-            score -= 14
+            score -= 22
             warnings.append("Duelist bez inicjatora będzie często musiał wchodzić bez przygotowania.")
         if agent.name in SELFISH_DUELISTS and analysis.role_counts[Role.DUELIST] >= 1:
-            score -= 12
+            score -= 24
             warnings.append("Kolejny samowystarczalny duelist wnosi mało utility dla drużyny.")
 
     if agent.role == Role.INITIATOR and analysis.role_counts[Role.DUELIST] >= 1:

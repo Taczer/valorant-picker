@@ -12,6 +12,7 @@ from .app_settings import (
     default_settings_path,
     load_settings,
     save_settings,
+    with_profile,
     with_refresh,
     with_start_mode,
 )
@@ -25,14 +26,14 @@ from .valorant_api import ValorantApiService
 
 
 STYLE_OPTIONS = {
-    "1": ("aggressive", "agresywny entry"),
-    "2": ("support", "spokojny support"),
+    "1": ("aggressive", "aggressive entry"),
+    "2": ("support", "support"),
     "3": ("lurker", "lurker"),
     "4": ("controller", "smoker/controller"),
-    "5": ("defensive", "sentinel/defensywny"),
+    "5": ("defensive", "sentinel/defensive"),
     "6": ("initiator", "initiator/support"),
     "7": ("solo_queue", "solo queue"),
-    "8": ("beginner", "początkujący"),
+    "8": ("beginner", "beginner"),
 }
 
 
@@ -59,11 +60,11 @@ def main() -> None:
         print(render_recommendation(sample_recommendation()))
         return
     if args.manual:
-        run_interactive()
+        run_interactive(settings.profile)
         return
 
     if not args.live and settings.default_start_mode == "manual":
-        run_interactive()
+        run_interactive(settings.profile)
         return
     if not args.live and settings.default_start_mode == "status":
         print_status(debug_logger)
@@ -179,11 +180,12 @@ def _reconfigure_stream(stream, encoding: str) -> None:
 
 
 def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None = None) -> None:
-    snapshot = ValorantApiService.read_live_snapshot(debug_logger)
+    snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile)
     while True:
         clear_terminal()
         print(render_live_snapshot(snapshot))
         print(f"\nRefresh interval: {settings.refresh_seconds:.1f}s")
+        print(f"Profile: {_profile_label(settings.profile)}")
         if debug_logger:
             print(f"Debug log: {debug_logger.path}")
         choice = _read_menu_choice(settings.refresh_seconds)
@@ -191,23 +193,21 @@ def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None =
             return
         if choice == "0":
             return
-        if choice == "5":
-            run_interactive()
-            snapshot = ValorantApiService.read_live_snapshot(debug_logger)
-            continue
-        if choice == "6":
-            settings = _settings_menu(settings)
-            snapshot = ValorantApiService.read_live_snapshot(debug_logger)
+        if choice == "3":
+            run_interactive(settings.profile)
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile)
             continue
         if choice == "4":
+            settings = _settings_menu(settings)
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile)
+            continue
+        if choice == "2":
             clear_terminal()
             print(render_agent_list())
             input("\nPress Enter to return to menu...")
             continue
-        if choice in {"1", "2"}:
-            continue
-        if choice == "3" or choice == "":
-            snapshot = ValorantApiService.read_live_snapshot(debug_logger)
+        if choice == "1" or choice == "":
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile)
             continue
         print("Unknown menu option.")
         try:
@@ -216,13 +216,13 @@ def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None =
             return
 
 
-def run_interactive() -> None:
+def run_interactive(default_profile: UserProfile | None = None) -> None:
     print_header()
     print("Tryb ręczny MVP. Wpisz mapę i aktualne picki teamu.")
     print("Dostępne mapy:", ", ".join(sorted(MAPS)))
     map_name = _ask_map()
     team = _ask_team()
-    profile = _ask_profile()
+    profile = _ask_profile(default_profile)
     print()
     print_recommendation(recommend(team, MAPS[map_name], profile))
     _pause_after_manual_result()
@@ -327,22 +327,21 @@ def _ask_state(player: str) -> SelectionState:
     return SelectionState.NONE
 
 
-def _ask_profile() -> UserProfile:
+def _ask_profile(default_profile: UserProfile | None = None) -> UserProfile:
     print()
-    print("Profil gracza:")
+    print("Player profile:")
     for key, (_, label) in STYLE_OPTIONS.items():
         print(f"{key}. {label}")
-    raw_styles = input("Style po przecinku, np. 4,7 albo puste: ").strip()
-    selected_styles = set()
-    for item in raw_styles.replace(" ", "").split(","):
-        if item in STYLE_OPTIONS:
-            selected_styles.add(STYLE_OPTIONS[item][0])
-
-    beginner = "beginner" in selected_styles
-    return UserProfile(
-        preferred_styles=frozenset(selected_styles),
-        beginner_mode=beginner,
-    )
+    if default_profile is not None:
+        print(f"Saved profile: {_profile_label(default_profile)}")
+        print("Enter = use saved profile, '-' = no profile.")
+    raw_styles = input("Style numbers, e.g. 4,7 or empty: ").strip()
+    if default_profile is not None and not raw_styles:
+        return default_profile
+    if raw_styles == "-":
+        return UserProfile()
+    styles, beginner = _parse_style_choices(raw_styles)
+    return UserProfile(preferred_styles=frozenset(styles), beginner_mode=beginner)
 
 
 def _find_key(raw: str, options: dict) -> str | None:
@@ -361,6 +360,7 @@ def _settings_menu(settings: AppSettings) -> AppSettings:
     print()
     print(f"1. Refresh interval: {settings.refresh_seconds:.1f}s")
     print(f"2. Domyślny tryb startu: {_start_mode_label(settings.default_start_mode)}")
+    print(f"3. Player profile: {_profile_label(settings.profile)}")
     print()
     print("Enter bez wartości zostawia aktualne ustawienie.")
 
@@ -380,6 +380,26 @@ def _settings_menu(settings: AppSettings) -> AppSettings:
     mode_by_choice = {"1": "live", "2": "manual", "3": "status"}
     if raw_mode in mode_by_choice:
         settings = with_start_mode(settings, mode_by_choice[raw_mode])
+
+    profile = settings.profile
+    print()
+    print("Player profile:")
+    for key, (_, label) in STYLE_OPTIONS.items():
+        print(f"{key}. {label}")
+    print(f"Current: {_profile_label(profile)}")
+    print("Type numbers, e.g. 4,7 or 4,7,8. '-' clears profile. Empty = no change.")
+
+    raw_profile = input("Profile numbers: ").strip()
+    if raw_profile == "-":
+        profile = UserProfile()
+    elif raw_profile:
+        styles, beginner_from_choice = _parse_style_choices(raw_profile)
+        profile = UserProfile(
+            preferred_styles=frozenset(styles),
+            beginner_mode=beginner_from_choice,
+        )
+
+    settings = with_profile(settings, profile)
 
     try:
         save_settings(settings)
@@ -403,6 +423,30 @@ def _debug_logger_from_args(args) -> SafeDebugLogger | None:
     if not args.debug:
         return None
     return SafeDebugLogger(Path(args.debug_log))
+
+
+def _parse_style_choices(raw_styles: str) -> tuple[set[str], bool]:
+    selected_styles: set[str] = set()
+    beginner = False
+    for item in (part.strip() for part in raw_styles.split(",")):
+        if item in STYLE_OPTIONS:
+            style = STYLE_OPTIONS[item][0]
+            if style == "beginner":
+                beginner = True
+            else:
+                selected_styles.add(style)
+    return selected_styles, beginner
+
+
+def _profile_label(profile: UserProfile) -> str:
+    labels = [
+        label
+        for style, label in STYLE_OPTIONS.values()
+        if style != "beginner" and style in profile.preferred_styles
+    ]
+    if profile.beginner_mode:
+        labels.append("beginner")
+    return ", ".join(labels) if labels else "no preferences"
 
 
 def _read_menu_choice(timeout_seconds: float) -> str | None:
