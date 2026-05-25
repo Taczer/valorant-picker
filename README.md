@@ -59,12 +59,6 @@ It does not:
 
 This is an unofficial fan-made tool and is not endorsed by Riot Games. Valorant is a trademark of Riot Games.
 
-## Documentation
-
-- [Profile Guide](PROFILE_GUIDE.md)
-- [Live Usage](LIVE_USAGE.md)
-- [Build EXE](BUILD_EXE.md)
-- [Changelog](CHANGELOG.md)
 
 ---
 
