@@ -2,6 +2,31 @@
 
 Zmiany od dodania profili gracza.
 
+## 2026-05-25
+
+### Internationalization / i18n
+
+- Dodano pełne wsparcie dwóch języków aplikacji: `English` i `Polski`.
+- Domyślnym językiem publicznej wersji jest `English`.
+- Język można zmienić w `Settings`.
+- Ustawienie języka jest zapisywane w `%APPDATA%\ValoPicker\settings.json`.
+- Przetłumaczono widoczne elementy CMD: menu, status, manual mode, ekran live, rekomendacje, problemy, ostrzeżenia, porady i błędy normalizera.
+- Dodano testy spójności słowników i18n, żeby `en` i `pl` miały ten sam zestaw kluczy.
+- Poprawiono brakujące tłumaczenia PL w ekranie live/no-client: menu, komunikaty statusu, profil, interwał odświeżania i fallback `Unknown`.
+- Przetłumaczono w PL stany picków `locked/selected` oraz etykietę `Lvl ?` w ekranie teamu.
+- Rozszerzono dane strategiczne agent+mapa do struktury EN/PL, żeby angielski tryb nie korzystał z polskich notatek ani hardcodowanych wyjątków.
+- Przeniesiono dane map tuning i synergie do `valo_picker/data/`.
+- Dodano strukturalne `ReasonKind` dla powodów rekomendacji oraz strukturalne issue normalizera zamiast testowania logiki po gotowych stringach UI.
+- Dodano `Agent.traits` i przeniesiono cechę `selfish` z osobnej listy do danych agenta.
+- Dodano testy integralności danych strategicznych.
+
+### Code cleanup
+
+- Zebrano główne stałe scoringu rekomendera w jednym miejscu i opisano je jako heurystyczne wagi, a nie wartości probabilistyczne.
+- Zoptymalizowano liczenie `team_score_after_pick`, żeby bazowe role i utility teamu nie były odbudowywane od zera dla każdego kandydata.
+- Dodano komentarz przy `ssl._create_unverified_context()` wyjaśniający self-signed cert lokalnego API Riot Client.
+- Dodano `requirements.txt` z informacją, że aplikacja nie ma zależności runtime poza standard library.
+
 ## 2026-05-21
 
 ### Profil gracza
@@ -18,6 +43,7 @@ Zmiany od dodania profili gracza.
 - Dodano menu `Settings`.
 - Dodano zapis `refresh_seconds` w zakresie 2-10 sekund.
 - Dodano zapis domyślnego trybu startu: `Live`, `Manual` albo `Status`.
+- Dodano ustawienie języka: domyślnie `English`, opcjonalnie `Polski`.
 - Dodano zapis ustawień do `%APPDATA%\ValoPicker\settings.json`.
 - Dodano obsługę `--live`, żeby jednorazowo wymusić tryb live niezależnie od ustawień.
 - Argument `--refresh` może jednorazowo nadpisać zapisany interwał odświeżania.
@@ -26,6 +52,7 @@ Zmiany od dodania profili gracza.
 
 - Poprawiono obsługę kodowania konsoli dla polskich znaków.
 - Dodano ustawianie tytułu okna i próbę ustawienia czcionki konsoli na `Consolas`.
+- Dodano próbę ustawienia domyślnego rozmiaru okna konsoli na `74x34`, żeby aplikacja nie startowała z przesadnie szerokim oknem.
 - Potwierdzono, że problem z brakującymi polskimi znakami może wynikać z czcionki CMD.
 - Dodano build samodzielnego pliku `dist\ValoPicker.exe`.
 - Dodano `ValoPicker.spec`, `build_exe.ps1`, `requirements-build.txt` i instrukcję `BUILD_EXE.md`.
@@ -37,6 +64,7 @@ Zmiany od dodania profili gracza.
 - Usunięto osobną opcję `View Recommendation`, bo dublowała widok `View Pre-Game (Agent Select) Players`.
 - Ekran live jest mniej przeładowany i mocniej eksponuje rekomendację w Agent Select.
 - Manual mode nie kończy już od razu pracy po pokazaniu wyniku, więc da się spokojnie odczytać rekomendację.
+- Manual mode pozwala wpisać `0`, `q`, `quit` albo `menu`, żeby wrócić do menu bez kończenia całego programu.
 
 ### Rekomendacje
 

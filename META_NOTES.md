@@ -100,7 +100,8 @@ Dobre, gdy gracz chce brać pojedynki w solo queue. Program nie powinien ich wci
 
 - Baza map: `valo_picker/data/maps.py`
 - Baza agentów: `valo_picker/data/agents.py`
-- Cechy map, synergie, powody i pro tipy agent+mapa: `valo_picker/strategy.py`
+- Cechy map: `valo_picker/data/map_tuning.py`
+- Synergie, powody i pro tipy agent+mapa: `valo_picker/data/synergies.py`
 - Scoring kandydatów: `valo_picker/recommender.py`
 - Testy scenariuszy: `tests/test_recommender.py`
 
