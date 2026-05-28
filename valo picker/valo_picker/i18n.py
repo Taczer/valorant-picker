@@ -1,8 +1,33 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 SUPPORTED_LANGUAGES = frozenset({"en", "pl"})
 DEFAULT_LANGUAGE = "en"
+ASCII_SAFE_LANGUAGES = frozenset({"pl"})
+POLISH_ASCII_TRANSLATION = str.maketrans(
+    {
+        "ą": "a",
+        "ć": "c",
+        "ę": "e",
+        "ł": "l",
+        "ń": "n",
+        "ó": "o",
+        "ś": "s",
+        "ź": "z",
+        "ż": "z",
+        "Ą": "A",
+        "Ć": "C",
+        "Ę": "E",
+        "Ł": "L",
+        "Ń": "N",
+        "Ó": "O",
+        "Ś": "S",
+        "Ź": "Z",
+        "Ż": "Z",
+    }
+)
 
 
 MESSAGES: dict[str, dict[str, str]] = {
@@ -133,7 +158,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "analysis_missing_wall": "This map strongly values a wall controller or plant wall.",
         "analysis_missing_clear": "Missing utility to clear close corners.",
         "analysis_missing_stall": "Missing utility to stop fast hits.",
-        "analysis_map_context": "Map context: {note}",
+        "analysis_missing_utility": "Missing utility: {utility}.",
         "rec_unbalanced_warning": "Team is heavily unbalanced. Fill the missing key role first.",
         "rec_duelist_warning": "A duelist recommendation only makes sense for your profile; composition prefers utility.",
         "rec_locked_agent": "Agent is already locked by another player.",
@@ -185,7 +210,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "rec_beginner_hard": "This agent is harder while beginner mode is enabled.",
         "rec_team_score_up": "Raises team score from {before}/10 to {after}/10.",
         "rec_team_score_flat": "Does not improve overall team balance in the role and utility model.",
-        "advice_controller_ascent": "Play close to the team, smoke Heaven, Tree, Market and entries. Use flash/utility with entry instead of lurking too far.",
         "advice_controller": "Prioritize smokes for entry and retake. Do not die before using key utility.",
         "advice_initiator": "Set utility for the duelist entry. Use info or flash first, then trade; do not spend everything without team contact.",
         "advice_sentinel": "Secure flank and play for information. On attack, hold enemy lurks; on defense, delay entries instead of taking isolated fights.",
@@ -203,14 +227,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "local_puuid_error": "Could not determine player PUUID.",
         "local_http_error": "Local API returned HTTP {status}: {path}",
         "local_connect_error": "Cannot connect to local client: {error}",
+        "local_json_error": "Local API returned invalid JSON for {path}: {error}",
         "remote_http_error": "Riot API returned HTTP {status}: {path}",
         "remote_connect_error": "Cannot connect to Riot {service} API: {error}",
+        "remote_json_error": "Riot {service} API returned invalid JSON for {path}: {error}",
         "remote_pregame_403": "Pre-Game Player unavailable (HTTP 403). Waiting for pre-game lobby.",
         "remote_pregame_404": "Not in Agent Select or Pre-Game Player unavailable (HTTP {status}). Waiting for pre-game lobby.",
         "remote_no_match_id": "Pre-Game Player response did not include MatchID.",
         "remote_current_game": "Current game detected. Recommendations are available during Agent Select.",
         "remote_party_warning": "Party Player unavailable (HTTP {status}); continuing with Pre-Game Player.",
         "normalizer_unknown_map": "Unknown MapID: {map_id}",
+        "normalizer_bad_pregame_payload": "Pre-game data has an unexpected format.",
+        "normalizer_bad_coregame_payload": "Current-game data has an unexpected format.",
         "normalizer_missing_pregame_map": "Missing MapID in pre-game data.",
         "normalizer_missing_coregame_map": "Missing MapID in current-game data.",
         "normalizer_missing_ally_team": "Missing AllyTeam in pre-game data.",
@@ -356,7 +384,7 @@ MESSAGES["pl"].update(
         "analysis_missing_wall": "Mapa mocno lubi wall controllera albo ścianę pod plant.",
         "analysis_missing_clear": "Brakuje utility do czyszczenia bliskich kątów.",
         "analysis_missing_stall": "Brakuje utility do zatrzymywania szybkich wejść.",
-        "analysis_map_context": "Kontekst mapy: {note}",
+        "analysis_missing_utility": "Brakuje utility: {utility}.",
         "rec_unbalanced_warning": "Team jest mocno niezbalansowany. Najpierw uzupełnij brakującą kluczową rolę.",
         "rec_duelist_warning": "Rekomendacja duelista ma sens tylko przy Twoim profilu; kompozycyjnie lepsza jest rola utility.",
         "rec_locked_agent": "Agent jest już zalockowany przez innego gracza.",
@@ -408,7 +436,6 @@ MESSAGES["pl"].update(
         "rec_beginner_hard": "Agent jest trudniejszy, a masz włączony tryb początkujący.",
         "rec_team_score_up": "Podnosi ocenę teamu z {before}/10 do {after}/10.",
         "rec_team_score_flat": "Nie poprawia ogólnego balansu teamu według modelu ról i utility.",
-        "advice_controller_ascent": "Graj blisko teamu, dawaj smoke'i na Heaven, Tree, Market i pod wejścia. Używaj flasha/utility razem z entry, zamiast lurkować za daleko.",
         "advice_controller": "Priorytetem są smoke'i pod wejście i retake. Nie oddawaj życia przed użyciem kluczowego utility.",
         "advice_initiator": "Ustawiaj utility pod wejście duelista. Najpierw info albo flash, potem trade; nie zużywaj wszystkiego bez kontaktu teamu.",
         "advice_sentinel": "Zabezpiecz flankę i graj pod informację. W ataku trzymaj lurka przeciwnika, w obronie opóźniaj wejścia zamiast brać samotne pojedynki.",
@@ -426,14 +453,18 @@ MESSAGES["pl"].update(
         "local_puuid_error": "Nie mozna ustalić PUUID gracza.",
         "local_http_error": "Lokalne API zwróciło HTTP {status}: {path}",
         "local_connect_error": "Nie mozna polaczyc z lokalnym klientem: {error}",
+        "local_json_error": "Lokalne API zwrocilo niepoprawny JSON dla {path}: {error}",
         "remote_http_error": "Riot API zwróciło HTTP {status}: {path}",
         "remote_connect_error": "Nie mozna połaczyc z Riot {service} API: {error}",
+        "remote_json_error": "Riot {service} API zwrocilo niepoprawny JSON dla {path}: {error}",
         "remote_pregame_403": "Pre-Game Player niedostepny (HTTP 403). Czekam na lobby pre-game.",
         "remote_pregame_404": "Nie jestes w wyborze agenta albo Pre-Game Player jest niedostępny (HTTP {status}). Czekam na lobby pre-game.",
         "remote_no_match_id": "Odpowiedź Pre-Game Player nie zawiera MatchID.",
         "remote_current_game": "Wykryto aktywna gre. Rekomendacje są dostępne podczas wyboru agenta.",
         "remote_party_warning": "Party Player niedostępny (HTTP {status}); kontynuuję z Pre-Game Player.",
         "normalizer_unknown_map": "Nieznany MapID: {map_id}",
+        "normalizer_bad_pregame_payload": "Dane pre-game maja nieoczekiwany format.",
+        "normalizer_bad_coregame_payload": "Dane current-game maja nieoczekiwany format.",
         "normalizer_missing_pregame_map": "Brak MapID w danych pre-game.",
         "normalizer_missing_coregame_map": "Brak MapID w danych current-game.",
         "normalizer_missing_ally_team": "Brak AllyTeam w danych pre-game.",
@@ -456,4 +487,30 @@ def normalize_language(language: str | None) -> str:
 def t(language: str | None, key: str, **params) -> str:
     lang = normalize_language(language)
     template = MESSAGES.get(lang, MESSAGES[DEFAULT_LANGUAGE]).get(key, MESSAGES[DEFAULT_LANGUAGE].get(key, key))
-    return template.format(**params)
+    return display_text(template.format(**params), lang)
+
+
+def display_text(text: str, language: str | None = None) -> str:
+    if normalize_language(language) in ASCII_SAFE_LANGUAGES:
+        return text.translate(POLISH_ASCII_TRANSLATION)
+    return text
+
+
+def localized_text(localized: Mapping[str, str], language: str | None = None) -> str | None:
+    """Return localized display text, falling back to English.
+
+    None means the mapping has no usable default text. Strategic data is
+    expected to include both "en" and "pl"; data integrity tests enforce that.
+    """
+    lang = normalize_language(language)
+    if lang in localized:
+        return display_text(localized[lang], lang)
+    fallback = localized.get(DEFAULT_LANGUAGE)
+    return display_text(fallback, DEFAULT_LANGUAGE) if fallback else None
+
+
+def localized_texts(localized: Mapping[str, tuple[str, ...]], language: str | None = None) -> tuple[str, ...]:
+    lang = normalize_language(language)
+    if lang in localized:
+        return tuple(display_text(text, lang) for text in localized[lang])
+    return tuple(display_text(text, DEFAULT_LANGUAGE) for text in localized.get(DEFAULT_LANGUAGE, ()))

@@ -7,8 +7,8 @@ from enum import StrEnum
 from .analyzer import analyze_team, calculate_team_score
 from .data.agents import AGENTS
 from .data.map_tuning import DEFAULT_ROLE_WEIGHTS, MAP_TUNING
-from .data.synergies import MAP_AGENT_NOTES, MAP_AGENT_TIPS, PAIR_SYNERGIES, localized_strategy_text, localized_strategy_tips
-from .i18n import t
+from .data.synergies import MAP_AGENT_NOTES, MAP_AGENT_TIPS, MAP_ROLE_ADVICE, PAIR_SYNERGIES
+from .i18n import localized_text, localized_texts, t
 from .models import Agent, CandidateScore, MapInfo, Recommendation, Role, SelectionState, TeamAnalysis, TeamSlot, UserProfile
 
 
@@ -32,10 +32,44 @@ class Reason:
 
 @dataclass(frozen=True)
 class ScoringContext:
+    team: tuple[TeamSlot, ...]
     map_info: MapInfo
     profile: UserProfile
     analysis: TeamAnalysis
     language: str
+    picked_names: frozenset[str]
+    selected_names: frozenset[str]
+    locked_names: frozenset[str]
+    base_role_counts: Counter[Role]
+    base_utility_counts: Counter[str]
+
+    @classmethod
+    def build(
+        cls,
+        team: tuple[TeamSlot, ...],
+        map_info: MapInfo,
+        profile: UserProfile,
+        analysis: TeamAnalysis,
+        language: str,
+    ) -> ScoringContext:
+        picked_agents = _picked_agents(team)
+        base_role_counts = Counter(picked.role for picked in picked_agents)
+        base_utility_counts: Counter[str] = Counter()
+        for picked in picked_agents:
+            base_utility_counts.update(picked.utility)
+        picked_names, selected_names, locked_names = _picked_name_sets(team)
+        return cls(
+            team=team,
+            map_info=map_info,
+            profile=profile,
+            analysis=analysis,
+            language=language,
+            picked_names=picked_names,
+            selected_names=selected_names,
+            locked_names=locked_names,
+            base_role_counts=base_role_counts,
+            base_utility_counts=base_utility_counts,
+        )
 
     def t(self, key: str, **params) -> str:
         return t(self.language, key, **params)
@@ -111,23 +145,12 @@ def recommend(
     language: str = "en",
 ) -> Recommendation:
     profile = profile or UserProfile()
-    analysis = analyze_team(team, map_info, language)
-    ctx = ScoringContext(map_info=map_info, profile=profile, analysis=analysis, language=language)
-    picked_agents = _picked_agents(team)
-    base_role_counts = Counter(picked.role for picked in picked_agents)
-    base_utility_counts = Counter()
-    for picked in picked_agents:
-        base_utility_counts.update(picked.utility)
+    analysis = analyze_team(team, map_info)
+    ctx = ScoringContext.build(team, map_info, profile, analysis, language)
     candidates = tuple(
         sorted(
             (
-                _score_agent(
-                    agent_name,
-                    team,
-                    ctx,
-                    base_role_counts,
-                    base_utility_counts,
-                )
+                _score_agent(agent_name, ctx)
                 for agent_name in AGENTS
             ),
             key=lambda candidate: candidate.score,
@@ -157,18 +180,14 @@ def recommend(
 
 def _score_agent(
     agent_name: str,
-    team: tuple[TeamSlot, ...],
     ctx: ScoringContext,
-    base_role_counts: Counter[Role],
-    base_utility_counts: Counter[str],
 ) -> CandidateScore:
     agent = AGENTS[agent_name]
     reasons: list[Reason] = []
     warnings: list[str] = []
-    picked_names, selected_names, locked_names = _picked_name_sets(team)
 
     score = BASE_AGENT_SCORE
-    score += _score_availability(agent, picked_names, selected_names, locked_names, ctx, warnings)
+    score += _score_availability(agent, ctx, warnings)
     score += _score_missing_roles(agent, ctx, reasons)
     score += _score_role_stacking(agent, ctx, reasons, warnings)
     score += _score_critical_gaps(agent, ctx, warnings)
@@ -178,11 +197,11 @@ def _score_agent(
     score += _score_missing_utility(agent, ctx, reasons)
     score += _score_utility_targets(agent, ctx, reasons)
     score += _score_map_features(agent, ctx, reasons, warnings)
-    score += _score_team_synergy(agent, team, ctx, reasons, warnings)
+    score += _score_team_synergy(agent, ctx, reasons, warnings)
     score += _score_profile_fit(agent, ctx, reasons, warnings)
 
-    team_after = _team_score_after(agent, base_role_counts, base_utility_counts, ctx.map_info)
-    score += _score_team_delta(agent, team_after, picked_names, ctx, reasons, warnings)
+    team_after = _team_score_after(agent, ctx)
+    score += _score_team_delta(agent, team_after, ctx, reasons, warnings)
 
     if not reasons:
         reasons.append(Reason(ReasonKind.MAP, _default_agent_reason(agent, ctx)))
@@ -192,19 +211,16 @@ def _score_agent(
 
 def _score_availability(
     agent: Agent,
-    picked_names: set[str],
-    selected_names: set[str],
-    locked_names: set[str],
     ctx: ScoringContext,
     warnings: list[str],
 ) -> float:
-    if agent.name in locked_names:
+    if agent.name in ctx.locked_names:
         warnings.append(ctx.t("rec_locked_agent"))
         return -LOCKED_AGENT_PENALTY
-    if agent.name in selected_names:
+    if agent.name in ctx.selected_names:
         warnings.append(ctx.t("rec_selected_agent"))
         return -SELECTED_AGENT_PENALTY
-    if agent.name in picked_names:
+    if agent.name in ctx.picked_names:
         warnings.append(ctx.t("rec_taken_agent"))
         return -TAKEN_AGENT_PENALTY
     return 0.0
@@ -308,7 +324,7 @@ def _score_map_notes(agent: Agent, ctx: ScoringContext, reasons: list[Reason]) -
     map_note = MAP_AGENT_NOTES.get(ctx.map_info.name, {}).get(agent.name)
     if not map_note:
         return 0.0
-    note = localized_strategy_text(map_note, ctx.language)
+    note = localized_text(map_note, ctx.language)
     if note:
         reasons.append(Reason(ReasonKind.MAP, note))
     return MAP_NOTE_BONUS
@@ -358,7 +374,6 @@ def _score_profile_fit(agent: Agent, ctx: ScoringContext, reasons: list[Reason],
 def _score_team_delta(
     agent: Agent,
     team_after: float,
-    picked_names: set[str],
     ctx: ScoringContext,
     reasons: list[Reason],
     warnings: list[str],
@@ -366,16 +381,20 @@ def _score_team_delta(
     score = (team_after - ctx.analysis.score) * TEAM_SCORE_DELTA_MULTIPLIER
     if team_after > ctx.analysis.score:
         reasons.append(Reason(ReasonKind.SCORE, ctx.t("rec_team_score_up", before=ctx.analysis.score, after=team_after)))
-    elif team_after <= ctx.analysis.score and agent.name not in picked_names:
+    elif team_after <= ctx.analysis.score and agent.name not in ctx.picked_names:
         score -= NO_BALANCE_IMPROVEMENT_PENALTY
         warnings.append(ctx.t("rec_team_score_flat"))
     return score
 
 
 def _default_agent_reason(agent: Agent, ctx: ScoringContext) -> str:
-    if ctx.language == "pl":
-        return agent.description
-    return ctx.t("rec_map_specific", agent=agent.name, map=ctx.map_info.name)
+    return localized_text(
+        {
+            "pl": agent.description,
+            "en": ctx.t("rec_map_specific", agent=agent.name, map=ctx.map_info.name),
+        },
+        ctx.language,
+    ) or ctx.t("rec_map_specific", agent=agent.name, map=ctx.map_info.name)
 
 
 def _prioritize_reasons(reasons: list[Reason]) -> tuple[str, ...]:
@@ -401,32 +420,30 @@ def _picked_agents(team: tuple[TeamSlot, ...]):
     ]
 
 
-def _picked_name_sets(team: tuple[TeamSlot, ...]) -> tuple[set[str], set[str], set[str]]:
-    picked_names = {
+def _picked_name_sets(team: tuple[TeamSlot, ...]) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    picked_names = frozenset(
         slot.agent_name
         for slot in team
         if slot.agent_name and slot.state in {SelectionState.SELECTED, SelectionState.LOCKED}
-    }
-    selected_names = {
+    )
+    selected_names = frozenset(
         slot.agent_name for slot in team if slot.agent_name and slot.state == SelectionState.SELECTED
-    }
-    locked_names = {
+    )
+    locked_names = frozenset(
         slot.agent_name for slot in team if slot.agent_name and slot.state == SelectionState.LOCKED
-    }
+    )
     return picked_names, selected_names, locked_names
 
 
 def _team_score_after(
-    agent,
-    base_role_counts: Counter[Role],
-    base_utility_counts: Counter[str],
-    map_info: MapInfo,
+    agent: Agent,
+    ctx: ScoringContext,
 ) -> float:
-    role_counts = base_role_counts.copy()
-    utility_counts = base_utility_counts.copy()
+    role_counts = ctx.base_role_counts.copy()
+    utility_counts = ctx.base_utility_counts.copy()
     role_counts[agent.role] += 1
     utility_counts.update(agent.utility)
-    return calculate_team_score(role_counts, utility_counts, map_info)
+    return calculate_team_score(role_counts, utility_counts, ctx.map_info)
 
 
 def _score_utility_targets(
@@ -512,14 +529,13 @@ def _score_map_features(agent: Agent, ctx: ScoringContext, reasons: list[Reason]
 
 def _score_team_synergy(
     agent: Agent,
-    team: tuple[TeamSlot, ...],
     ctx: ScoringContext,
     reasons: list[Reason],
     warnings: list[str],
 ) -> float:
     allies = [
         AGENTS[slot.agent_name]
-        for slot in team
+        for slot in ctx.team
         if slot.agent_name in AGENTS and slot.state in {SelectionState.SELECTED, SelectionState.LOCKED}
     ]
     score = 0.0
@@ -530,7 +546,7 @@ def _score_team_synergy(
         pair_bonus = PAIR_SYNERGIES.get(pair)
         if pair_bonus and (not pair_bonus[2] or ctx.map_info.name in pair_bonus[2]):
             score += pair_bonus[0]
-            reason = localized_strategy_text(pair_bonus[1], ctx.language)
+            reason = localized_text(pair_bonus[1], ctx.language)
             if reason:
                 synergy_reasons.append(Reason(ReasonKind.SYNERGY, reason))
 
@@ -619,19 +635,22 @@ def advice_for_agent(agent_name: str, map_info: MapInfo, language: str = "en") -
     tip_text = MAP_AGENT_TIPS.get(map_info.name, {}).get(agent.name)
     prefix_parts = []
     if map_note:
-        note = localized_strategy_text(map_note, language)
+        note = localized_text(map_note, language)
         if note:
             prefix_parts.append(t(language, "advice_map_prefix", agent=agent.name, map=map_info.name, note=note))
     if tip_text:
-        tips = localized_strategy_tips(tip_text, language)
+        tips = localized_texts(tip_text, language)
         if tips:
             prefix_parts.append(t(language, "advice_pro_tips", tips=" | ".join(tips)))
     prefix = " ".join(prefix_parts)
     if prefix:
         prefix += " "
+    map_role_advice = MAP_ROLE_ADVICE.get(map_info.name, {}).get(agent.role)
+    if map_role_advice:
+        advice = localized_text(map_role_advice, language)
+        if advice:
+            return prefix + advice
     if agent.role == Role.CONTROLLER:
-        if map_info.name == "Ascent":
-            return prefix + t(language, "advice_controller_ascent")
         return prefix + t(language, "advice_controller")
     if agent.role == Role.INITIATOR:
         return prefix + t(language, "advice_initiator")

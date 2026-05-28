@@ -4,6 +4,7 @@ import os
 import re
 from textwrap import wrap
 
+from .analyzer import format_composition_problem
 from .data.agents import AGENTS
 from .i18n import t
 from .models import LivePregameSnapshot, LiveStatus, Recommendation, SelectionState, TeamSlot
@@ -12,6 +13,12 @@ from .recommender import advice_for_agent
 
 
 WIDTH = 70
+MAX_NORMALIZATION_WARNINGS = 4
+MAX_NORMALIZATION_ERRORS = 4
+MAX_ALTERNATIVES = 4
+MAX_PROBLEMS = 3
+MAX_REASONS = 3
+MAX_WARNINGS = 2
 
 
 def render_live_snapshot(snapshot: LivePregameSnapshot, language: str = "en") -> str:
@@ -46,9 +53,9 @@ def render_live_snapshot(snapshot: LivePregameSnapshot, language: str = "en") ->
         lines.append(t(language, "render_status"))
         lines.append(f"  {snapshot.message}")
     if normalized:
-        for warning in normalized.warnings[:4]:
+        for warning in normalized.warnings[:MAX_NORMALIZATION_WARNINGS]:
             lines.append(t(language, "render_warning", warning=format_normalization_issue(warning, language)))
-        for error in normalized.errors[:4]:
+        for error in normalized.errors[:MAX_NORMALIZATION_ERRORS]:
             lines.append(t(language, "render_error", error=format_normalization_issue(error, language)))
     lines.extend(_menu(language))
     return "\n".join(lines)
@@ -121,20 +128,20 @@ def _recommendation_section(recommendation: Recommendation, language: str) -> li
     ]
     if recommendation.best_role_to_fill:
         lines.append(t(language, "render_fill_role", role=recommendation.best_role_to_fill.value))
-    alternatives = ", ".join(candidate.agent.name for candidate in recommendation.alternatives[:4])
+    alternatives = ", ".join(candidate.agent.name for candidate in recommendation.alternatives[:MAX_ALTERNATIVES])
     if alternatives:
         lines.append(t(language, "render_alternatives", alternatives=alternatives))
     lines.append(t(language, "render_problems"))
-    problems = recommendation.analysis.problems[:3]
+    problems = recommendation.analysis.problems[:MAX_PROBLEMS]
     if problems:
-        lines.extend(f"  - {problem}" for problem in problems)
+        lines.extend(f"  - {format_composition_problem(problem, language)}" for problem in problems)
     else:
         lines.append(t(language, "render_no_problems"))
     lines.append(t(language, "render_why"))
-    lines.extend(f"  - {reason}" for reason in best.reasons[:3])
+    lines.extend(f"  - {reason}" for reason in best.reasons[:MAX_REASONS])
     if best.warnings:
         lines.append(t(language, "render_watch"))
-        lines.extend(f"  - {warning}" for warning in best.warnings[:2])
+        lines.extend(f"  - {warning}" for warning in best.warnings[:MAX_WARNINGS])
     lines.append(t(language, "render_advice"))
     lines.extend(_wrapped_text(_short_advice(recommendation.advice)))
     return lines

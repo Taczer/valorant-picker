@@ -27,6 +27,8 @@ class LiveStatus(StrEnum):
 
 class NormalizationIssueKind(StrEnum):
     UNKNOWN_MAP = "unknown_map"
+    BAD_PREGAME_PAYLOAD = "bad_pregame_payload"
+    BAD_COREGAME_PAYLOAD = "bad_coregame_payload"
     MISSING_PREGAME_MAP = "missing_pregame_map"
     MISSING_COREGAME_MAP = "missing_coregame_map"
     MISSING_ALLY_TEAM = "missing_ally_team"
@@ -36,6 +38,16 @@ class NormalizationIssueKind(StrEnum):
     UNKNOWN_CHARACTER = "unknown_character"
     MISSING_CORE_PLAYERS = "missing_core_players"
     NO_ALLIES = "no_allies"
+
+
+class CompositionProblemKind(StrEnum):
+    MISSING_CONTROLLER = "missing_controller"
+    MISSING_INITIATOR = "missing_initiator"
+    MISSING_SENTINEL = "missing_sentinel"
+    MISSING_DUELIST = "missing_duelist"
+    TOO_MANY_DUELISTS = "too_many_duelists"
+    TWO_DUELISTS_NO_CONTROLLER = "two_duelists_no_controller"
+    MISSING_UTILITY = "missing_utility"
 
 
 @dataclass(frozen=True)
@@ -101,6 +113,12 @@ class NormalizationIssue:
 
 
 @dataclass(frozen=True)
+class CompositionProblem:
+    kind: CompositionProblemKind
+    params: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class UserProfile:
     preferred_styles: frozenset[str] = field(default_factory=frozenset)
     beginner_mode: bool = False
@@ -112,7 +130,7 @@ class TeamAnalysis:
     utility_counts: dict[str, int]
     selected_agents: tuple[str, ...]
     locked_agents: tuple[str, ...]
-    problems: tuple[str, ...]
+    problems: tuple[CompositionProblem, ...]
     missing_roles: tuple[Role, ...]
     missing_utility: tuple[str, ...]
     score: float

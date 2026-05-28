@@ -119,9 +119,15 @@ class LocalClientAuth:
     @classmethod
     def from_lockfile(cls, path: Path = LOCKFILE_PATH) -> "LocalClientAuth":
         raw = path.read_text(encoding="utf-8").strip()
+        return cls.from_lockfile_content(raw)
+
+    @classmethod
+    def from_lockfile_content(cls, raw: str) -> "LocalClientAuth":
         parts = raw.split(":")
         if len(parts) != 5:
             raise RuntimeError("Lockfile ma nieoczekiwany format.")
+        if not all(parts):
+            raise RuntimeError("Lockfile ma puste pola.")
         return cls(*parts)
 
 
@@ -242,7 +248,7 @@ class ValorantApiService:
     @classmethod
     def snapshot_from_pregame_payload(
         cls,
-        payload: dict[str, Any],
+        payload: Any,
         self_puuid: str | None = None,
         party_id: str | None = None,
         region: str | None = None,
@@ -287,7 +293,7 @@ class ValorantApiService:
         )
         try:
             with urllib.request.urlopen(request, context=self._ssl_context, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                payload = _read_json_response(response, path, "local", self.language)
                 self._debug("response", service="local", method="GET", endpoint=path, http_status=getattr(response, "status", 200))
                 return payload
         except urllib.error.HTTPError as exc:
@@ -318,7 +324,7 @@ class ValorantApiService:
         )
         try:
             with urllib.request.urlopen(request, context=self._ssl_context, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                payload = _read_json_response(response, path, "GLZ", self.language)
                 self._debug("response", service="glz", method="GET", endpoint=path, http_status=getattr(response, "status", 200))
                 return payload
         except urllib.error.HTTPError as exc:
@@ -352,7 +358,7 @@ class ValorantApiService:
         )
         try:
             with urllib.request.urlopen(request, context=self._ssl_context, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                payload = _read_json_response(response, path, "PD", self.language)
                 self._debug("response", service="pd", method="PUT", endpoint=path, http_status=getattr(response, "status", 200))
                 return payload
         except urllib.error.HTTPError as exc:
@@ -381,9 +387,9 @@ class ValorantApiService:
 
     def get_auth_bundle(self) -> RiotAuthBundle:
         payload = self.get_entitlements_token()
-        access_token = payload.get("accessToken")
-        entitlement_token = payload.get("token")
-        puuid = payload.get("subject")
+        access_token = payload.get("accessToken") if isinstance(payload, dict) else None
+        entitlement_token = payload.get("token") if isinstance(payload, dict) else None
+        puuid = payload.get("subject") if isinstance(payload, dict) else None
         if not isinstance(puuid, str) or not puuid:
             user_info = self.get_rso_user_info()
             puuid = _extract_puuid(user_info)
@@ -530,7 +536,8 @@ class ValorantApiService:
         party_warning = None
         try:
             party_payload = self.get_party_player(auth_bundle.puuid, auth_bundle, region_context, client_version)
-            party_id = _optional_str(party_payload.get("CurrentPartyID"))
+            if isinstance(party_payload, dict):
+                party_id = _optional_str(party_payload.get("CurrentPartyID"))
         except ValorantApiHttpError as exc:
             if exc.status_code not in {403, 404}:
                 raise
@@ -610,7 +617,7 @@ class ValorantApiService:
                 )
             raise
 
-        match_id = _optional_str(pregame_player.get("MatchID"))
+        match_id = _optional_str(pregame_player.get("MatchID")) if isinstance(pregame_player, dict) else None
         if not match_id:
             core_snapshot = self._try_coregame_snapshot(
                 auth_bundle,
@@ -681,7 +688,7 @@ class ValorantApiService:
                 return None
             raise
 
-        match_id = _optional_str(coregame_player.get("MatchID"))
+        match_id = _optional_str(coregame_player.get("MatchID")) if isinstance(coregame_player, dict) else None
         if not match_id:
             return None
 
@@ -735,12 +742,25 @@ class ValorantApiService:
             self.debug_logger.log(event, **fields)
 
 
-def _extract_region(payload: dict[str, Any]) -> str | None:
+def _extract_region(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
     for key in ("region", "Region", "webRegion", "WebRegion"):
         value = payload.get(key)
         if isinstance(value, str) and value:
             return value.lower()
     return None
+
+
+def _read_json_response(response: Any, path: str, service: str, language: str) -> Any:
+    try:
+        return json.loads(response.read().decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        if service == "local":
+            message = t(language, "local_json_error", path=path, error=exc)
+        else:
+            message = t(language, "remote_json_error", service=service, path=path, error=exc)
+        raise RuntimeError(message) from exc
 
 
 def _canonical_region(region: str | None) -> str | None:
@@ -750,7 +770,9 @@ def _canonical_region(region: str | None) -> str | None:
     return REGION_ALIASES.get(normalized, normalized)
 
 
-def _extract_puuid(payload: dict[str, Any]) -> str | None:
+def _extract_puuid(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
     for key in ("sub", "subject", "puuid", "user_id"):
         value = payload.get(key)
         if isinstance(value, str) and value:

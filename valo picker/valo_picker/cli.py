@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from textwrap import indent
 
+from . import __version__
 from .app_settings import (
     AppSettings,
     default_settings_path,
@@ -21,9 +22,10 @@ from .app_settings import (
 )
 from .data.agents import AGENTS
 from .data.maps import MAPS
+from .analyzer import format_composition_problem
 from .debug_log import DEFAULT_DEBUG_LOG_PATH, SafeDebugLogger
 from .i18n import t
-from .models import SelectionState, TeamSlot, UserProfile
+from .models import LivePregameSnapshot, SelectionState, TeamSlot, UserProfile
 from .recommender import recommend
 from .terminal_ui import clear_terminal, render_agent_list, render_live_snapshot, render_recommendation
 from .valorant_api import ValorantApiService
@@ -55,7 +57,11 @@ def main() -> None:
     parser.add_argument("--refresh", type=float, default=None, help="częstotliwość odświeżania live 2.0-10.0s")
     parser.add_argument("--debug", action="store_true", help="zapisz bezpieczny debug log bez tokenów")
     parser.add_argument("--debug-log", default=str(DEFAULT_DEBUG_LOG_PATH), help="ścieżka debug logu")
+    parser.add_argument("--version", action="store_true", help="pokaż wersję aplikacji")
     args = parser.parse_args()
+    if args.version:
+        print(f"Valo Picker {__version__}")
+        return
     debug_logger = _debug_logger_from_args(args)
     settings = load_settings()
     if args.refresh is not None:
@@ -212,7 +218,7 @@ def _set_console_layout() -> None:
         pass
     try:
         subprocess.run(
-            ["mode.com", "con:", "cols=97", "lines=70"],
+            ["mode.com", "con:", "cols=107", "lines=70"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -230,14 +236,22 @@ def _reconfigure_stream(stream, encoding: str) -> None:
 
 def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None = None) -> None:
     snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile, settings.language)
+    last_render_signature = None
+    force_render = True
     while True:
-        clear_terminal()
-        print(render_live_snapshot(snapshot, settings.language))
-        print("\n" + t(settings.language, "live_refresh", seconds=settings.refresh_seconds))
-        print(t(settings.language, "live_profile", profile=_profile_label(settings.profile, settings.language)))
-        if debug_logger:
-            print(t(settings.language, "status_debug_log", path=debug_logger.path))
-        choice = _read_menu_choice(settings.refresh_seconds, settings.language)
+        render_signature = _live_render_signature(snapshot)
+        rendered_now = False
+        if force_render or render_signature != last_render_signature:
+            clear_terminal()
+            print(render_live_snapshot(snapshot, settings.language))
+            print("\n" + t(settings.language, "live_refresh", seconds=settings.refresh_seconds))
+            print(t(settings.language, "live_profile", profile=_profile_label(settings.profile, settings.language)))
+            if debug_logger:
+                print(t(settings.language, "status_debug_log", path=debug_logger.path))
+            last_render_signature = render_signature
+            force_render = False
+            rendered_now = True
+        choice = _read_menu_choice(settings.refresh_seconds, settings.language, show_prompt=rendered_now)
         if choice is None:
             return
         if choice == "0":
@@ -245,17 +259,24 @@ def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None =
         if choice == "3":
             run_interactive(settings.profile, settings.language)
             snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile, settings.language)
+            force_render = True
             continue
         if choice == "4":
             settings = _settings_menu(settings)
             snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile, settings.language)
+            force_render = True
             continue
         if choice == "2":
             clear_terminal()
             print(render_agent_list(settings.language))
             input("\n" + t(settings.language, "settings_return"))
+            force_render = True
             continue
-        if choice == "1" or choice == "":
+        if choice == "1":
+            snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile, settings.language)
+            force_render = True
+            continue
+        if choice == "":
             snapshot = ValorantApiService.read_live_snapshot(debug_logger, settings.profile, settings.language)
             continue
         print(t(settings.language, "menu_unknown"))
@@ -263,6 +284,32 @@ def run_live_first(settings: AppSettings, debug_logger: SafeDebugLogger | None =
             input(t(settings.language, "menu_continue"))
         except EOFError:
             return
+        force_render = True
+
+
+def _live_render_signature(snapshot: LivePregameSnapshot) -> tuple:
+    normalized = snapshot.normalized_match
+    recommendation = snapshot.recommendation
+    team = recommendation.team if recommendation else (normalized.team if normalized else ())
+    team_signature = tuple((slot.player_name, slot.agent_name, slot.state.value, slot.is_self) for slot in team)
+    best_signature = recommendation.best.agent.name if recommendation else None
+    map_signature = normalized.map_info.name if normalized and normalized.map_info else snapshot.map_name
+    warning_signature = tuple((issue.kind.value, tuple(sorted(issue.params.items()))) for issue in normalized.warnings) if normalized else ()
+    error_signature = tuple((issue.kind.value, tuple(sorted(issue.params.items()))) for issue in normalized.errors) if normalized else ()
+    return (
+        snapshot.status.value,
+        snapshot.message,
+        map_signature,
+        snapshot.mode,
+        snapshot.game_state,
+        snapshot.match_id,
+        snapshot.region,
+        snapshot.shard,
+        team_signature,
+        best_signature,
+        warning_signature,
+        error_signature,
+    )
 
 
 def run_interactive(default_profile: UserProfile | None = None, language: str = "en") -> bool:
@@ -310,7 +357,8 @@ def print_recommendation(result, language: str = "en") -> None:
         print(t(language, "render_fill_role", role=result.best_role_to_fill.value).strip())
     print(t(language, "render_problems"))
     if result.analysis.problems:
-        print(indent("\n".join(f"- {problem}" for problem in result.analysis.problems[:6]), "  "))
+        problems = (format_composition_problem(problem, language) for problem in result.analysis.problems[:6])
+        print(indent("\n".join(f"- {problem}" for problem in problems), "  "))
     else:
         print(t(language, "render_no_problems"))
 
@@ -538,21 +586,24 @@ def _player_label(slot: TeamSlot, language: str = "en") -> str:
     return slot.player_name
 
 
-def _read_menu_choice(timeout_seconds: float, language: str = "en") -> str | None:
+def _read_menu_choice(timeout_seconds: float, language: str = "en", show_prompt: bool = True) -> str | None:
     if not sys.stdin.isatty():
         try:
             return input(t(language, "menu_choice")).strip().lstrip("\ufeff")
         except EOFError:
             return None
     if os.name == "nt":
-        return _read_windows_choice(timeout_seconds, language)
+        return _read_windows_choice(timeout_seconds, language, show_prompt)
     try:
         import select
 
-        print(t(language, "menu_choice"), end="", flush=True)
+        if show_prompt:
+            print(t(language, "menu_choice"), end="", flush=True)
         readable, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
         if readable:
             return sys.stdin.readline().strip().lstrip("\ufeff")
+        if show_prompt:
+            print()
         return ""
     except Exception:
         try:
@@ -568,21 +619,25 @@ def _pause_after_manual_result(language: str = "en") -> None:
         return
 
 
-def _read_windows_choice(timeout_seconds: float, language: str = "en") -> str:
+def _read_windows_choice(timeout_seconds: float, language: str = "en", show_prompt: bool = True) -> str:
     import msvcrt
 
-    print(t(language, "menu_choice"), end="", flush=True)
+    if show_prompt:
+        print(t(language, "menu_choice"), end="", flush=True)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if msvcrt.kbhit():
             char = msvcrt.getwch()
             if char in {"\r", "\n"}:
-                print()
+                if show_prompt:
+                    print()
                 return ""
-            print(char)
+            if show_prompt:
+                print(char)
             return char.strip().lstrip("\ufeff")
         time.sleep(0.05)
-    print()
+    if show_prompt:
+        print()
     return ""
 
 

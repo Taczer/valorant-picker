@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from valo_picker.models import Role
 
 
 LocalizedText = dict[str, str]
@@ -336,14 +336,12 @@ PAIR_SYNERGIES: dict[frozenset[str], PairSynergy] = {
 }
 
 
-def localized_strategy_text(value: Mapping[str, str], language: str) -> str | None:
-    if language in value:
-        return value[language]
-    return value.get("en")
-
-
-def localized_strategy_tips(value: Mapping[str, tuple[str, ...]], language: str) -> tuple[str, ...]:
-    if language in value:
-        return value[language]
-    return value.get("en", ())
+MAP_ROLE_ADVICE: dict[str, dict[Role, LocalizedText]] = {
+    "Ascent": {
+        Role.CONTROLLER: {
+            "en": "Play close to the team, smoke Heaven, Tree, Market and entries. Use flash/utility with entry instead of lurking too far.",
+            "pl": "Graj blisko teamu, dawaj smoke'i na Heaven, Tree, Market i pod wejścia. Używaj flasha/utility razem z entry, zamiast lurkować za daleko.",
+        }
+    }
+}
 

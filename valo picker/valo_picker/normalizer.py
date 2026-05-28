@@ -17,21 +17,31 @@ def agent_name_from_id(character_id: str) -> str | None:
     return agent.name if agent else None
 
 
-def team_from_pregame_match(payload: dict[str, Any], self_puuid: str | None = None) -> tuple[TeamSlot, ...]:
-    return _normalize_team(payload, self_puuid)[0]
+def team_from_pregame_match(payload: Any, self_puuid: str | None = None) -> tuple[TeamSlot, ...]:
+    return normalize_pregame_match(payload, self_puuid).team
 
 
 def team_from_coregame_match(
-    payload: dict[str, Any],
+    payload: Any,
     self_puuid: str | None = None,
     player_names: dict[str, str] | None = None,
 ) -> tuple[TeamSlot, ...]:
-    return _normalize_coregame_team(payload, self_puuid, player_names)[0]
+    return normalize_coregame_match(payload, self_puuid, player_names).team
 
 
-def normalize_pregame_match(payload: dict[str, Any], self_puuid: str | None = None) -> PreGameNormalizationResult:
+def normalize_pregame_match(payload: Any, self_puuid: str | None = None) -> PreGameNormalizationResult:
     warnings: list[NormalizationIssue] = []
     errors: list[NormalizationIssue] = []
+    if not isinstance(payload, dict):
+        return PreGameNormalizationResult(
+            map_info=None,
+            team=(),
+            warnings=(),
+            errors=(_issue(NormalizationIssueKind.BAD_PREGAME_PAYLOAD),),
+            match_id=None,
+            map_id=None,
+        )
+
     match_id = _optional_str(payload.get("ID") or payload.get("MatchID"))
     map_id = _optional_str(payload.get("MapID"))
 
@@ -58,12 +68,22 @@ def normalize_pregame_match(payload: dict[str, Any], self_puuid: str | None = No
 
 
 def normalize_coregame_match(
-    payload: dict[str, Any],
+    payload: Any,
     self_puuid: str | None = None,
     player_names: dict[str, str] | None = None,
 ) -> PreGameNormalizationResult:
     warnings: list[NormalizationIssue] = []
     errors: list[NormalizationIssue] = []
+    if not isinstance(payload, dict):
+        return PreGameNormalizationResult(
+            map_info=None,
+            team=(),
+            warnings=(),
+            errors=(_issue(NormalizationIssueKind.BAD_COREGAME_PAYLOAD),),
+            match_id=None,
+            map_id=None,
+        )
+
     match_id = _optional_str(payload.get("MatchID") or payload.get("ID"))
     map_id = _optional_str(payload.get("MapID"))
 
