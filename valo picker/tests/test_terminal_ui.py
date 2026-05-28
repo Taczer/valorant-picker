@@ -1,17 +1,36 @@
 import unittest
 
+from valo_picker.analyzer import format_composition_problem
 from valo_picker.data.agents import AGENTS
 from valo_picker.data.maps import MAPS
 from valo_picker.models import (
+    CandidateScore,
+    CompositionProblem,
+    CompositionProblemKind,
     LivePregameSnapshot,
     LiveStatus,
+    NormalizationIssue,
+    NormalizationIssueKind,
     PreGameNormalizationResult,
+    Recommendation,
+    Role,
     SelectionState,
+    TeamAnalysis,
     TeamSlot,
     UserProfile,
 )
 from valo_picker.recommender import recommend
-from valo_picker.terminal_ui import render_agent_list, render_live_snapshot, render_recommendation
+from valo_picker.terminal_ui import (
+    MAX_ALTERNATIVES,
+    MAX_NORMALIZATION_ERRORS,
+    MAX_NORMALIZATION_WARNINGS,
+    MAX_PROBLEMS,
+    MAX_REASONS,
+    MAX_WARNINGS,
+    render_agent_list,
+    render_live_snapshot,
+    render_recommendation,
+)
 from valo_picker.i18n import t
 
 
@@ -41,25 +60,33 @@ def sample_polish_recommendation():
 
 class TerminalUiTests(unittest.TestCase):
     def test_sample_recommendation_renders_cmd_style_screen(self):
-        output = render_recommendation(sample_recommendation())
+        recommendation = sample_recommendation()
+        output = render_recommendation(recommendation)
 
-        self.assertIn("PRE-GAME (AGENT SELECT)", output)
-        self.assertIn("Map: Ascent", output)
-        self.assertIn("Your Team:", output)
+        self.assertIn(t("en", "snapshot_title_agent_select"), output)
+        self.assertIn(t("en", "snapshot_map", map="Ascent"), output)
+        self.assertIn(t("en", "render_team"), output)
         self.assertIn("[Jett", output)
-        self.assertIn("Best Pick: Omen", output)
-        self.assertIn("---- Menu ----", output)
+        self.assertIn(
+            t("en", "render_best_pick", agent=recommendation.best.agent.name, role=recommendation.best.agent.role.value),
+            output,
+        )
+        self.assertIn(t("en", "menu_title"), output)
 
     def test_polish_recommendation_renders_polish_labels(self):
-        output = render_recommendation(sample_polish_recommendation(), "pl")
+        recommendation = sample_polish_recommendation()
+        output = render_recommendation(recommendation, "pl")
 
-        self.assertIn("Rekomendacja:", output)
-        self.assertIn("Najlepszy pick: Omen", output)
-        self.assertIn("Problemy:", output)
-        self.assertIn("zablokowany/poziom ?", output)
-        self.assertIn("zaznaczony/poziom ?", output)
-        self.assertNotIn("locked/Lvl ?", output)
-        self.assertNotIn("selected/Lvl ?", output)
+        self.assertIn(t("pl", "render_recommendation"), output)
+        self.assertIn(
+            t("pl", "render_best_pick", agent=recommendation.best.agent.name, role=recommendation.best.agent.role.value),
+            output,
+        )
+        self.assertIn(t("pl", "render_problems"), output)
+        self.assertIn(f"{t('pl', 'state_locked')}/{t('pl', 'render_level_unknown')}", output)
+        self.assertIn(f"{t('pl', 'state_selected')}/{t('pl', 'render_level_unknown')}", output)
+        self.assertNotIn(f"{t('en', 'state_locked')}/{t('en', 'render_level_unknown')}", output)
+        self.assertNotIn(f"{t('en', 'state_selected')}/{t('en', 'render_level_unknown')}", output)
 
     def test_polish_live_snapshot_localizes_generated_player_labels(self):
         normalized = PreGameNormalizationResult(
@@ -81,10 +108,10 @@ class TerminalUiTests(unittest.TestCase):
 
         output = render_live_snapshot(snapshot, "pl")
 
-        self.assertIn("Gracz 1", output)
-        self.assertIn("Ty", output)
-        self.assertNotIn("Player 1", output)
-        self.assertNotIn("You", output)
+        self.assertIn(t("pl", "manual_player", index=1), output)
+        self.assertIn(t("pl", "manual_self"), output)
+        self.assertNotIn(t("en", "manual_player", index=1), output)
+        self.assertNotIn(t("en", "manual_self"), output)
 
     def test_english_recommendation_does_not_mix_common_polish_labels(self):
         output = render_recommendation(sample_recommendation())
@@ -103,19 +130,19 @@ class TerminalUiTests(unittest.TestCase):
 
         output = render_live_snapshot(snapshot, "pl")
 
-        self.assertIn("Nie wykryto procesu Valoranta", output)
-        self.assertIn("Mapa: Nieznana", output)
-        self.assertIn("1. Odswiez teraz", output)
-        self.assertIn("2. Lista agentow", output)
-        self.assertIn("3. Tryb reczny", output)
-        self.assertIn("4. Ustawienia", output)
-        self.assertIn("0. Wyjscie", output)
-        self.assertNotIn("Valorant process not detected", output)
-        self.assertNotIn("Map: Unknown", output)
-        self.assertNotIn("Refresh Now", output)
-        self.assertNotIn("List all agents", output)
-        self.assertNotIn("Manual Mode", output)
-        self.assertNotIn("Settings", output)
+        self.assertIn(t("pl", "local_valorant_missing"), output)
+        self.assertIn(t("pl", "snapshot_map", map=t("pl", "unknown_map")), output)
+        self.assertIn(t("pl", "menu_refresh"), output)
+        self.assertIn(t("pl", "menu_agents"), output)
+        self.assertIn(t("pl", "menu_manual"), output)
+        self.assertIn(t("pl", "menu_settings"), output)
+        self.assertIn(t("pl", "menu_exit"), output)
+        self.assertNotIn(t("en", "local_valorant_missing"), output)
+        self.assertNotIn(t("en", "snapshot_map", map=t("en", "unknown_map")), output)
+        self.assertNotIn(t("en", "menu_refresh"), output)
+        self.assertNotIn(t("en", "menu_agents"), output)
+        self.assertNotIn(t("en", "menu_manual"), output)
+        self.assertNotIn(t("en", "menu_settings"), output)
 
     def test_empty_and_unknown_agent_labels_are_distinct(self):
         normalized = PreGameNormalizationResult(
@@ -137,8 +164,8 @@ class TerminalUiTests(unittest.TestCase):
 
         output = render_live_snapshot(snapshot)
 
-        self.assertIn("[Unknown", output)
-        self.assertIn("[no pick", output)
+        self.assertIn(f"[{t('en', 'unknown_agent')}", output)
+        self.assertIn(f"[{t('en', 'state_none')}", output)
 
     def test_menu_does_not_offer_agent_selection_or_locking(self):
         output = render_recommendation(sample_recommendation())
@@ -150,7 +177,7 @@ class TerminalUiTests(unittest.TestCase):
     def test_agent_list_renders_known_agents(self):
         output = render_agent_list()
 
-        self.assertIn("ALL AGENTS", output)
+        self.assertIn(t("en", "render_all_agents"), output)
         self.assertIn(f"[{'Omen':<12}]", output)
         self.assertIn(AGENTS["Omen"].role.value, output)
 
@@ -174,14 +201,111 @@ class TerminalUiTests(unittest.TestCase):
 
         output = render_live_snapshot(snapshot, "pl")
 
-        self.assertIn("AKTYWNA GRA", output)
-        self.assertIn("Mapa: Ascent", output)
-        self.assertIn("Stan: IN_PROGRESS", output)
+        self.assertIn(t("pl", "snapshot_title_current_game"), output)
+        self.assertIn(t("pl", "snapshot_map", map="Ascent"), output)
+        self.assertIn(t("pl", "snapshot_state", state="IN_PROGRESS"), output)
         self.assertIn("Taczer#EUW (Omen)", output)
         self.assertIn("Current game detected.", output)
-        self.assertIn("Porada dla Twojego agenta:", output)
-        self.assertIn("Pro tipy:", output)
+        self.assertIn(t("pl", "render_agent_advice"), output)
+        self.assertIn(t("pl", "advice_pro_tips", tips=""), output)
         self.assertIn("Graj blisko teamu", output)
+
+    def test_recommendation_render_respects_output_limits(self):
+        best = CandidateScore(
+            AGENTS["Omen"],
+            100.0,
+            tuple(f"reason-{index}" for index in range(MAX_REASONS + 2)),
+            tuple(f"warning-{index}" for index in range(MAX_WARNINGS + 2)),
+            9.0,
+        )
+        alternatives = tuple(
+            CandidateScore(
+                agent,
+                90.0 - index,
+                (f"alt-reason-{index}",),
+                (),
+                8.0,
+            )
+            for index, agent in enumerate(
+                (
+                    AGENTS["Astra"],
+                    AGENTS["Brimstone"],
+                    AGENTS["Clove"],
+                    AGENTS["Miks"],
+                    AGENTS["Viper"],
+                    AGENTS["Harbor"],
+                )
+            )
+        )
+        analysis = TeamAnalysis(
+            role_counts={role: 0 for role in Role},
+            utility_counts={},
+            selected_agents=(),
+            locked_agents=(),
+            problems=tuple(
+                CompositionProblem(CompositionProblemKind.MISSING_UTILITY, {"utility": utility})
+                for utility in ("smokes", "flash", "info", "clear", "wall")
+            ),
+            missing_roles=(),
+            missing_utility=(),
+            score=3.0,
+        )
+        recommendation = Recommendation(
+            map_info=MAPS["Ascent"],
+            team=(),
+            analysis=analysis,
+            best=best,
+            alternatives=alternatives,
+            best_role_to_fill=None,
+            advice="Advice.",
+            warning=None,
+        )
+
+        output = render_recommendation(recommendation)
+
+        self.assertIn(t("en", "render_alternatives", alternatives="Astra, Brimstone, Clove, Miks"), output)
+        self.assertNotIn("Viper", output)
+        self.assertNotIn("Harbor", output)
+        for index in range(MAX_REASONS):
+            self.assertIn(f"reason-{index}", output)
+        self.assertNotIn(f"reason-{MAX_REASONS}", output)
+        for index in range(MAX_WARNINGS):
+            self.assertIn(f"warning-{index}", output)
+        self.assertNotIn(f"warning-{MAX_WARNINGS}", output)
+        for problem in analysis.problems[:MAX_PROBLEMS]:
+            self.assertIn(format_composition_problem(problem, "en"), output)
+        for problem in analysis.problems[MAX_PROBLEMS:]:
+            self.assertNotIn(format_composition_problem(problem, "en"), output)
+
+    def test_live_snapshot_render_respects_normalization_issue_limits(self):
+        normalized = PreGameNormalizationResult(
+            map_info=MAPS["Ascent"],
+            team=(),
+            warnings=tuple(
+                NormalizationIssue(NormalizationIssueKind.UNKNOWN_MAP, {"map_id": f"warning-map-{index}"})
+                for index in range(MAX_NORMALIZATION_WARNINGS + 2)
+            ),
+            errors=tuple(
+                NormalizationIssue(NormalizationIssueKind.BAD_PLAYER, {"index": index})
+                for index in range(MAX_NORMALIZATION_ERRORS + 2)
+            ),
+            match_id="match-1",
+            map_id=MAPS["Ascent"].map_id,
+        )
+        snapshot = LivePregameSnapshot(
+            status=LiveStatus.AGENT_SELECT,
+            message="Agent Select lobby detected.",
+            normalized_match=normalized,
+        )
+
+        output = render_live_snapshot(snapshot)
+
+        for index in range(MAX_NORMALIZATION_WARNINGS):
+            self.assertIn(f"warning-map-{index}", output)
+        self.assertNotIn(f"warning-map-{MAX_NORMALIZATION_WARNINGS}", output)
+        for index in range(MAX_NORMALIZATION_ERRORS):
+            self.assertIn(t("en", "normalizer_bad_player", index=index), output)
+        self.assertNotIn(t("en", "normalizer_bad_player", index=MAX_NORMALIZATION_ERRORS), output)
 
 
 if __name__ == "__main__":

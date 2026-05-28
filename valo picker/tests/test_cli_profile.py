@@ -2,11 +2,20 @@ import unittest
 from unittest.mock import patch
 
 from valo_picker.app_settings import AppSettings
-from valo_picker.cli import _parse_style_choices, _settings_menu, run_interactive, run_live_first
-from valo_picker.models import LivePregameSnapshot, LiveStatus, UserProfile
+from valo_picker.cli import _parse_style_choices, _settings_menu, main, run_interactive, run_live_first
+from valo_picker.models import LivePregameSnapshot, LiveStatus, PreGameNormalizationResult, SelectionState, TeamSlot, UserProfile
 
 
 class CliProfileTests(unittest.TestCase):
+    def test_version_flag_prints_application_version(self):
+        with (
+            patch("sys.argv", ["valo-picker", "--version"]),
+            patch("builtins.print") as print_mock,
+        ):
+            main()
+
+        print_mock.assert_called_once_with("Valo Picker 0.2.0")
+
     def test_profile_choices_can_be_mixed_with_commas(self):
         styles, beginner = _parse_style_choices("4,7")
 
@@ -75,6 +84,64 @@ class CliProfileTests(unittest.TestCase):
             run_live_first(settings)
 
         read_snapshot.assert_called_once_with(None, profile, "en")
+
+    def test_live_mode_skips_redraw_when_auto_refresh_snapshot_is_unchanged(self):
+        settings = AppSettings()
+        snapshot = LivePregameSnapshot(status=LiveStatus.NO_CLIENT, message="No client.")
+
+        with (
+            patch("valo_picker.cli.ValorantApiService.read_live_snapshot", side_effect=[snapshot, snapshot]) as read_snapshot,
+            patch("valo_picker.cli.clear_terminal") as clear_terminal,
+            patch("valo_picker.cli.render_live_snapshot", return_value="snapshot") as render_live_snapshot,
+            patch("valo_picker.cli._read_menu_choice", side_effect=["", "0"]) as read_menu_choice,
+            patch("builtins.print"),
+        ):
+            run_live_first(settings)
+
+        self.assertEqual(read_snapshot.call_count, 2)
+        clear_terminal.assert_called_once()
+        render_live_snapshot.assert_called_once_with(snapshot, "en")
+        self.assertTrue(read_menu_choice.call_args_list[0].kwargs["show_prompt"])
+        self.assertFalse(read_menu_choice.call_args_list[1].kwargs["show_prompt"])
+
+    def test_live_mode_rerenders_when_team_signature_changes(self):
+        settings = AppSettings()
+        first_snapshot = LivePregameSnapshot(
+            status=LiveStatus.WAITING_FOR_AGENT_SELECT,
+            message="Pre-game data received.",
+            normalized_match=PreGameNormalizationResult(
+                map_info=None,
+                team=(TeamSlot("Player 1", "Jett", SelectionState.SELECTED),),
+                warnings=(),
+                errors=(),
+                match_id="match-1",
+                map_id=None,
+            ),
+        )
+        changed_snapshot = LivePregameSnapshot(
+            status=LiveStatus.WAITING_FOR_AGENT_SELECT,
+            message="Pre-game data received.",
+            normalized_match=PreGameNormalizationResult(
+                map_info=None,
+                team=(TeamSlot("Player 1", "Jett", SelectionState.LOCKED),),
+                warnings=(),
+                errors=(),
+                match_id="match-1",
+                map_id=None,
+            ),
+        )
+
+        with (
+            patch("valo_picker.cli.ValorantApiService.read_live_snapshot", side_effect=[first_snapshot, changed_snapshot]),
+            patch("valo_picker.cli.clear_terminal") as clear_terminal,
+            patch("valo_picker.cli.render_live_snapshot", return_value="snapshot") as render_live_snapshot,
+            patch("valo_picker.cli._read_menu_choice", side_effect=["", "0"]),
+            patch("builtins.print"),
+        ):
+            run_live_first(settings)
+
+        self.assertEqual(clear_terminal.call_count, 2)
+        self.assertEqual(render_live_snapshot.call_count, 2)
 
     def test_settings_profile_accepts_style_numbers_without_importing(self):
         settings = AppSettings()

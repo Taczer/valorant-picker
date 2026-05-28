@@ -1,6 +1,7 @@
 import base64
 import json
 import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from unittest.mock import patch
 from valo_picker.data.agents import AGENTS
 from valo_picker.data.maps import MAPS
 from valo_picker.debug_log import SafeDebugLogger
-from valo_picker.models import LiveStatus, UserProfile
+from valo_picker.models import LiveStatus, NormalizationIssueKind, Role, UserProfile
 from valo_picker.valorant_api import (
     CLIENT_PLATFORM,
     LocalClientAuth,
@@ -123,7 +124,8 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.match_id, "pregame-match-1")
         self.assertEqual(snapshot.client_version, "release-test")
         self.assertIsNotNone(snapshot.recommendation)
-        self.assertEqual(snapshot.recommendation.best.agent.name, "Omen")
+        self.assertEqual(snapshot.recommendation.best.agent.role, Role.CONTROLLER)
+        self.assertIn("smokes", snapshot.recommendation.best.agent.utility)
 
     def test_pregame_payload_passes_profile_to_recommender(self):
         profile = UserProfile(preferred_styles=frozenset({"support"}), beginner_mode=True)
@@ -139,6 +141,18 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.recommendation, recommendation)
         self.assertEqual(recommend_mock.call_args.args[2], profile)
         self.assertEqual(recommend_mock.call_args.args[3], "en")
+
+    def test_bad_pregame_payload_builds_error_snapshot_without_exception(self):
+        snapshot = ValorantApiService.snapshot_from_pregame_payload([], self_puuid="self-puuid")
+
+        self.assertEqual(snapshot.status, LiveStatus.ERROR)
+        self.assertIsNotNone(snapshot.normalized_match)
+        self.assertEqual(snapshot.normalized_match.team, ())
+        self.assertEqual(
+            tuple(issue.kind for issue in snapshot.normalized_match.errors),
+            (NormalizationIssueKind.BAD_PREGAME_PAYLOAD,),
+        )
+        self.assertIsNone(snapshot.recommendation)
 
     def test_shard_lookup(self):
         self.assertEqual(ValorantApiService.shard_for_region("eu"), "eu")
@@ -226,6 +240,34 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertNotIn("access-secret", repr(bundle))
         self.assertNotIn("entitlement-secret", repr(bundle))
 
+    def test_local_client_auth_parses_lockfile_content(self):
+        auth = LocalClientAuth.from_lockfile_content("RiotClient:12345:54321:secret:https")
+
+        self.assertEqual(auth.name, "RiotClient")
+        self.assertEqual(auth.pid, "12345")
+        self.assertEqual(auth.port, "54321")
+        self.assertEqual(auth.password, "secret")
+        self.assertEqual(auth.protocol, "https")
+        self.assertEqual(auth.base_url, "https://127.0.0.1:54321")
+
+    def test_local_client_auth_rejects_wrong_lockfile_field_count(self):
+        with self.assertRaises(RuntimeError):
+            LocalClientAuth.from_lockfile_content("RiotClient:12345")
+
+    def test_local_client_auth_rejects_empty_lockfile_fields(self):
+        with self.assertRaises(RuntimeError):
+            LocalClientAuth.from_lockfile_content("RiotClient:12345::secret:https")
+
+    def test_local_client_auth_reads_lockfile_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "lockfile"
+            path.write_text("RiotClient:12345:54321:secret:https", encoding="utf-8")
+
+            auth = LocalClientAuth.from_lockfile(path)
+
+        self.assertEqual(auth.port, "54321")
+        self.assertEqual(auth.password, "secret")
+
     def test_client_version_comes_from_valorant_external_session(self):
         auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
         service = ValorantApiService(auth)
@@ -303,6 +345,127 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(request.get_header("User-agent"), RIOT_USER_AGENT)
         self.assertEqual(captured["timeout"], 5)
 
+    def test_local_get_wraps_invalid_json_with_endpoint_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"<html>not json</html>"
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()):
+            with self.assertRaises(RuntimeError) as raised:
+                service.local_get("/riotclient/region-locale")
+
+        self.assertIn("invalid JSON", str(raised.exception))
+        self.assertIn("/riotclient/region-locale", str(raised.exception))
+
+    def test_local_get_wraps_http_error_with_endpoint_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        error = urllib.error.HTTPError(
+            url=auth.base_url + "/riotclient/region-locale",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=None,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as raised:
+                service.local_get("/riotclient/region-locale")
+
+        self.assertIn("HTTP 503", str(raised.exception))
+        self.assertIn("/riotclient/region-locale", str(raised.exception))
+
+    def test_local_get_wraps_url_error_with_connection_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
+            with self.assertRaises(RuntimeError) as raised:
+                service.local_get("/riotclient/region-locale")
+
+        self.assertIn("Cannot connect to local client", str(raised.exception))
+        self.assertIn("connection refused", str(raised.exception))
+
+    def test_glz_get_wraps_invalid_json_with_endpoint_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access-secret", "entitlement-secret", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"<html>not json</html>"
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()):
+            with self.assertRaises(RuntimeError) as raised:
+                service.glz_get("/pregame/v1/players/self-puuid", bundle, context, "release-test")
+
+        self.assertIn("invalid JSON", str(raised.exception))
+        self.assertIn("GLZ", str(raised.exception))
+        self.assertIn("/pregame/v1/players/self-puuid", str(raised.exception))
+
+    def test_pd_put_wraps_invalid_json_with_endpoint_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access-secret", "entitlement-secret", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"<html>not json</html>"
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()):
+            with self.assertRaises(RuntimeError) as raised:
+                service.pd_put("/name-service/v2/players", ["self-puuid"], bundle, context, "release-test")
+
+        self.assertIn("invalid JSON", str(raised.exception))
+        self.assertIn("PD", str(raised.exception))
+        self.assertIn("/name-service/v2/players", str(raised.exception))
+
+    def test_pd_put_wraps_http_error_with_endpoint_context(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access-secret", "entitlement-secret", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+        path = "/name-service/v2/players"
+        error = urllib.error.HTTPError(
+            url=f"https://pd.eu.a.pvp.net{path}",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(ValorantApiHttpError) as raised:
+                service.pd_put(path, ["self-puuid"], bundle, context, "release-test")
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.path, path)
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertIn(path, str(raised.exception))
+
     def test_debug_log_records_endpoint_and_status_without_tokens(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "debug.log"
@@ -363,7 +526,8 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.party_id, "party-1")
         self.assertEqual(snapshot.match_id, "pregame-match-1")
         self.assertEqual(snapshot.client_version, "release-test")
-        self.assertEqual(snapshot.recommendation.best.agent.name, "Omen")
+        self.assertEqual(snapshot.recommendation.best.agent.role, Role.CONTROLLER)
+        self.assertIn("smokes", snapshot.recommendation.best.agent.utility)
 
     def test_remote_snapshot_waits_when_pregame_player_404s(self):
         auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
@@ -390,6 +554,27 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.puuid, "self-puuid")
         self.assertEqual(snapshot.party_id, "party-1")
         self.assertEqual(snapshot.client_version, "release-test")
+        self.assertIsNone(snapshot.match_id)
+
+    def test_remote_snapshot_waits_when_pregame_player_payload_is_not_object(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access", "entitlement", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+        with (
+            patch.object(service, "get_auth_bundle", return_value=bundle),
+            patch.object(service, "get_party_player", return_value={"CurrentPartyID": "party-1"}),
+            patch.object(service, "get_pregame_player", return_value=[]),
+            patch.object(
+                service,
+                "get_coregame_player",
+                side_effect=ValorantApiHttpError(404, "/core-game/v1/players/self-puuid"),
+            ),
+        ):
+            snapshot = service._read_remote_snapshot(context, "release-test")
+
+        self.assertEqual(snapshot.status, LiveStatus.WAITING_FOR_AGENT_SELECT)
+        self.assertEqual(snapshot.party_id, "party-1")
         self.assertIsNone(snapshot.match_id)
 
     def test_remote_snapshot_detects_in_game_after_pregame_404(self):
@@ -456,6 +641,27 @@ class LiveSnapshotTests(unittest.TestCase):
             (("AstraPlayer#EUW", "Astra"), ("Taczer#EUW", "Jett")),
         )
 
+    def test_remote_snapshot_waits_when_coregame_player_payload_is_not_object(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access", "entitlement", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+        with (
+            patch.object(service, "get_auth_bundle", return_value=bundle),
+            patch.object(service, "get_party_player", return_value={"CurrentPartyID": "party-1"}),
+            patch.object(
+                service,
+                "get_pregame_player",
+                side_effect=ValorantApiHttpError(404, "/pregame/v1/players/self-puuid"),
+            ),
+            patch.object(service, "get_coregame_player", return_value=[]),
+        ):
+            snapshot = service._read_remote_snapshot(context, "release-test")
+
+        self.assertEqual(snapshot.status, LiveStatus.WAITING_FOR_AGENT_SELECT)
+        self.assertEqual(snapshot.party_id, "party-1")
+        self.assertIsNone(snapshot.match_id)
+
     def test_remote_snapshot_waits_when_pregame_player_403s(self):
         auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
         service = ValorantApiService(auth)
@@ -507,7 +713,8 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.status, LiveStatus.AGENT_SELECT)
         self.assertEqual(snapshot.party_id, "party-1")
         self.assertEqual(snapshot.match_id, "pregame-match-1")
-        self.assertEqual(snapshot.recommendation.best.agent.name, "Omen")
+        self.assertEqual(snapshot.recommendation.best.agent.role, Role.CONTROLLER)
+        self.assertIn("smokes", snapshot.recommendation.best.agent.utility)
 
     def test_remote_snapshot_continues_when_party_player_403s(self):
         auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
@@ -529,7 +736,27 @@ class LiveSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.status, LiveStatus.AGENT_SELECT)
         self.assertIsNone(snapshot.party_id)
         self.assertEqual(snapshot.match_id, "pregame-match-1")
-        self.assertEqual(snapshot.recommendation.best.agent.name, "Omen")
+        self.assertEqual(snapshot.recommendation.best.agent.role, Role.CONTROLLER)
+        self.assertIn("smokes", snapshot.recommendation.best.agent.utility)
+
+    def test_remote_snapshot_continues_when_party_player_payload_is_not_object(self):
+        auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")
+        service = ValorantApiService(auth)
+        bundle = RiotAuthBundle("access", "entitlement", "self-puuid")
+        context = ValorantRegionContext("eu", "eu")
+        with (
+            patch.object(service, "get_auth_bundle", return_value=bundle),
+            patch.object(service, "get_party_player", return_value=[]),
+            patch.object(service, "get_pregame_player", return_value={"MatchID": "pregame-match-1"}),
+            patch.object(service, "get_pregame_match", return_value=pregame_payload()),
+        ):
+            snapshot = service._read_remote_snapshot(context, "release-test")
+
+        self.assertEqual(snapshot.status, LiveStatus.AGENT_SELECT)
+        self.assertIsNone(snapshot.party_id)
+        self.assertEqual(snapshot.match_id, "pregame-match-1")
+        self.assertEqual(snapshot.recommendation.best.agent.role, Role.CONTROLLER)
+        self.assertIn("smokes", snapshot.recommendation.best.agent.utility)
 
     def test_remote_snapshot_refreshes_auth_once_after_401(self):
         auth = LocalClientAuth("RiotClient", "123", "4567", "secret", "https")

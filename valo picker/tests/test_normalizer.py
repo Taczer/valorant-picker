@@ -94,6 +94,18 @@ class PreGameNormalizerTests(unittest.TestCase):
         self.assertIsNone(result.map_info)
         self.assertTrue(has_issue(result.errors, NormalizationIssueKind.MISSING_PREGAME_MAP))
 
+    def test_bad_pregame_payload_returns_error_without_exception(self):
+        for payload in (None, [], "bad"):
+            with self.subTest(payload=payload):
+                result = normalize_pregame_match(payload)
+
+                self.assertIsNone(result.map_info)
+                self.assertEqual(result.team, ())
+                self.assertIsNone(result.match_id)
+                self.assertIsNone(result.map_id)
+                self.assertEqual(result.warnings, ())
+                self.assertTrue(has_issue(result.errors, NormalizationIssueKind.BAD_PREGAME_PAYLOAD))
+
     def test_unknown_character_id_returns_slot_without_agent_and_warning(self):
         payload = pregame_payload()
         payload["AllyTeam"]["Players"][0]["CharacterID"] = "unknown-character-id"
@@ -164,6 +176,18 @@ class PreGameNormalizerTests(unittest.TestCase):
             (("Ally#EUW", "Astra"), ("Taczer#EUW", "Jett")),
         )
         self.assertTrue(result.team[1].is_self)
+
+    def test_bad_coregame_payload_returns_error_without_exception(self):
+        for payload in (None, [], "bad"):
+            with self.subTest(payload=payload):
+                result = normalize_coregame_match(payload)
+
+                self.assertIsNone(result.map_info)
+                self.assertEqual(result.team, ())
+                self.assertIsNone(result.match_id)
+                self.assertIsNone(result.map_id)
+                self.assertEqual(result.warnings, ())
+                self.assertTrue(has_issue(result.errors, NormalizationIssueKind.BAD_COREGAME_PAYLOAD))
 
 
 if __name__ == "__main__":
